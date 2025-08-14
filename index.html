@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>南屯運動中心｜即時人數</title>
+  <title>南屯運動中心｜即時人數（多中心）</title>
   <!-- Chart.js + Luxon（時間軸） -->
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
@@ -32,13 +32,22 @@
     a { color:#60a5fa; text-decoration:none; } a:hover{ text-decoration:underline; }
     .chart-wrap{ height:420px; position:relative; }
     canvas{ position:absolute; inset:0; width:100% !important; height:100% !important; display:block; }
+    select, label { font-size:14px; }
+    .switch {
+      display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:10px;
+      border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06);
+    }
+    .select {
+      padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
+      background:rgba(255,255,255,.06); color:var(--fg);
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>南屯運動中心｜即時人數</h1>
-      <p class="sub">來源：Google Sheet（CSV 發佈）→ Chart.js（定時更新）</p>
+      <h1>南屯運動中心｜即時人數（多中心）</h1>
+      <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新）</p>
 
       <div class="row">
         <span class="pill">泳池 <b id="poolNow">—</b> 人</span>
@@ -52,6 +61,18 @@
           <button class="btn" data-range="7d">最近 7 天</button>
           <button class="btn" data-range="all">全部</button>
         </div>
+
+        <div style="flex:1"></div>
+
+        <label class="switch" title="只顯示 06:00–22:00 的資料">
+          <input type="checkbox" id="onlyDaytime" />
+          <span>只看 06–22</span>
+        </label>
+
+        <div>
+          <label for="centerSel" style="margin-right:6px;">運動中心：</label>
+          <select id="centerSel" class="select"></select>
+        </div>
       </div>
 
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
@@ -64,10 +85,23 @@
   </div>
 
   <script>
-    // === 你的設定（CSV 連結 & 更新頻率） ===
-    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
+    // === 你的設定 ===
+    // 1) 把下面這個 gid 換成 Google Sheet「all_centers」分頁的實際 gid 數字
+    const SHEET_GID_ALL_CENTERS = '840629068';
+    // 2) 你的已發佈 CSV 基底網址（不用帶 gid）
+    const CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
+    // 3) 更新頻率
     const REFRESH_MS = 600_000; // 10 分鐘；要 1 分鐘改 60_000
-    document.getElementById('csvLink').href = CSV_URL;
+
+    // === 動態產生 CSV 連結（指向 all_centers 分頁） ===
+    function csvUrl() {
+      const u = new URL(CSV_BASE);
+      // Published CSV 支援用 gid 指定分頁
+      u.searchParams.set('gid', SHEET_GID_ALL_CENTERS);
+      u.searchParams.set('_ts', Date.now()); // 防快取
+      return u.toString();
+    }
+    document.getElementById('csvLink').href = csvUrl();
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
 
     // 解析「2025/8/14 上午 9:01:16」→ 毫秒（台北時區）
@@ -80,51 +114,85 @@
       if (!dt.isValid) dt =
         luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);
       if (!dt.isValid) dt =
+        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);
+      if (!dt.isValid) dt =
         luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });
       return dt.isValid ? dt.toMillis() : NaN;
     }
 
-    // 讀 CSV
+    // 全部原始列（多中心）
+    /** @type {{t:number, center:string, pool:number, gym:number}[]} */
+    let rows = [];
+
+    // 篩選狀態
+    let currentRange = '24h';   // 24h / 7d / all
+    let currentCenter = '';     // 由 CSV 載入後填入第一個中心
+    let onlyDaytime = false;    // 是否只看 06–22
+
+    // 讀 CSV（all_centers）
     async function fetchCSV() {
-      const url = CSV_URL + (CSV_URL.includes('?') ? '&' : '?') + '_ts=' + Date.now(); // 防快取
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch(csvUrl(), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = await res.text();
-
       const lines = text.trim().split(/\r?\n/);
-      if (lines.length <= 1) return { times: [], pool: [], gym: [] };
+      if (lines.length <= 1) { rows = []; return; }
 
+      // 找欄位
       const header = lines[0].split(',').map(s => s.trim());
-      const idxTime = header.findIndex(h => /時間|timestamp/i.test(h));
-      const idxPool = header.findIndex(h => /泳池|pool/i.test(h));
-      const idxGym  = header.findIndex(h => /健身|gym/i.test(h));
-      if (idxTime < 0 || idxPool < 0 || idxGym < 0) throw new Error('欄位無法識別：' + header.join(','));
+      const idxTime   = header.findIndex(h => /時間|timestamp/i.test(h));
+      const idxCenter = header.findIndex(h => /中心|館|場館|center/i.test(h));
+      const idxPool   = header.findIndex(h => /泳池|pool/i.test(h));
+      const idxGym    = header.findIndex(h => /健身|gym/i.test(h));
+      if (idxTime < 0 || idxCenter < 0 || idxPool < 0 || idxGym < 0) {
+        throw new Error('欄位無法識別：' + header.join(','));
+      }
 
-      const times = [], pool = [], gym = [];
-      for (let i = 1; i < lines.length; i++) {
+      const tmp = [];
+      for (let i=1;i<lines.length;i++){
         const row = lines[i];
         if (!row.trim()) continue;
         const cols = row.split(',');
-        const tMs = parseTWDateMs((cols[idxTime] || '').trim());
-        if (Number.isNaN(tMs)) continue; // 跳過無效時間
-        times.push(tMs);
-        pool.push(Number((cols[idxPool] || '').trim()) || 0);
-        gym.push(Number((cols[idxGym]  || '').trim()) || 0);
+        const tMs = parseTWDateMs((cols[idxTime]||'').trim());
+        if (Number.isNaN(tMs)) continue;
+        const center = (cols[idxCenter]||'').trim();
+        const pool   = Number((cols[idxPool]||'').trim()) || 0;
+        const gym    = Number((cols[idxGym] ||'').trim()) || 0;
+        tmp.push({ t:tMs, center, pool, gym });
       }
-      return { times, pool, gym };
+      // 依時間排序（避免亂序）
+      tmp.sort((a,b)=>a.t-b.t);
+      rows = tmp;
+
+      // 填入中心下拉
+      const centers = Array.from(new Set(rows.map(r=>r.center))).filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+      const sel = document.getElementById('centerSel');
+      sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
+      if (!currentCenter || !centers.includes(currentCenter)) {
+        currentCenter = centers[0] || '';
+      }
+      sel.value = currentCenter;
     }
 
-    // 篩選（24h / 7d / all）
-    function filterByRange(times, pool, gym, range) {
-      if (range === 'all') return { times, pool, gym };
-      const now = Date.now();
-      const span = range === '24h' ? 24*60*60*1000 : 7*24*60*60*1000;
-      const cutoff = now - span;
-      const t = [], p = [], g = [];
-      for (let i=0;i<times.length;i++){
-        if (times[i] >= cutoff){ t.push(times[i]); p.push(pool[i]); g.push(gym[i]); }
+    // 依「中心、區間（24h/7d/all）、06–22」做篩選，回傳 times/pool/gym
+    function sliceForChart() {
+      let filtered = rows.filter(r => r.center === currentCenter);
+      if (onlyDaytime) {
+        filtered = filtered.filter(r => {
+          const h = luxon.DateTime.fromMillis(r.t).setZone('Asia/Taipei').hour;
+          return h >= 6 && h <= 22;
+        });
       }
-      return { times: t, pool: p, gym: g };
+      if (currentRange !== 'all') {
+        const now = Date.now();
+        const span = currentRange === '24h' ? 24*60*60*1000 : 7*24*60*60*1000;
+        const cutoff = now - span;
+        filtered = filtered.filter(r => r.t >= cutoff);
+      }
+      return {
+        times: filtered.map(r=>r.t),
+        pool:  filtered.map(r=>r.pool),
+        gym:   filtered.map(r=>r.gym),
+      };
     }
 
     // 只建立一次 Chart
@@ -167,14 +235,9 @@
       return chart;
     }
 
-    // 狀態
-    let rawTimes = [], rawPool = [], rawGym = [];
-    let currentRange = '24h'; // 預設顯示「最近 24 小時」
-
-    // 套用篩選並更新圖表
     function applyAndRender() {
       const c = initChart();
-      const { times, pool, gym } = filterByRange(rawTimes, rawPool, rawGym, currentRange);
+      const { times, pool, gym } = sliceForChart();
       c.data.labels = times;
       c.data.datasets[0].data = pool;
       c.data.datasets[1].data = gym;
@@ -185,28 +248,38 @@
         document.getElementById('gymNow').textContent  = gym[gym.length-1];
         document.getElementById('lastUpd').textContent =
           luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('MM/dd HH:mm:ss');
+      } else {
+        document.getElementById('poolNow').textContent = '—';
+        document.getElementById('gymNow').textContent  = '—';
+        document.getElementById('lastUpd').textContent = '—';
       }
+
       // 切換按鈕樣式
       document.querySelectorAll('.btn').forEach(b=>{
         b.classList.toggle('active', b.dataset.range === currentRange);
       });
     }
 
-    // 載入資料 + 定時刷新
     async function refresh() {
       try {
-        const { times, pool, gym } = await fetchCSV();
-        rawTimes = times; rawPool = pool; rawGym = gym;
+        await fetchCSV();
         applyAndRender();
-      } catch (e) { console.error(e); }
+        // 更新 footer 的 CSV 連結（帶最新 _ts）
+        document.getElementById('csvLink').href = csvUrl();
+      } catch (e) {
+        console.error(e);
+      }
     }
 
-    // 綁定按鈕
+    // 綁定 UI
     document.querySelectorAll('.btn').forEach(b=>{
-      b.addEventListener('click', ()=>{
-        currentRange = b.dataset.range;
-        applyAndRender();
-      });
+      b.addEventListener('click', ()=>{ currentRange = b.dataset.range; applyAndRender(); });
+    });
+    document.getElementById('onlyDaytime').addEventListener('change', (e)=>{
+      onlyDaytime = !!e.target.checked; applyAndRender();
+    });
+    document.getElementById('centerSel').addEventListener('change', (e)=>{
+      currentCenter = e.target.value; applyAndRender();
     });
 
     // 初始化
