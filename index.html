@@ -36,21 +36,7 @@
       background:rgba(255,255,255,.06); color:var(--fg);
       appearance:auto;
     }
-    .select:disabled { opacity:.5; cursor:not-allowed; }
     .select option { background:#fff; color:#000; } /* 展開列表白底黑字，避免看不到 */
-
-    /* 小開關 */
-    .switch {
-      display:inline-flex; align-items:center; gap:8px; cursor:pointer; user-select:none;
-      padding:6px 10px; border-radius:999px; border:1px solid rgba(255,255,255,.15);
-      background:rgba(255,255,255,.06);
-    }
-    .switch input { appearance:none; width:36px; height:20px; background:#4b5563; border-radius:999px; position:relative; outline:none; transition:.2s; }
-    .switch input:checked { background:#22c55e; }
-    .switch input::after {
-      content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:.2s;
-    }
-    .switch input:checked::after { left:18px; }
   </style>
 </head>
 <body>
@@ -79,19 +65,6 @@
               <option value="" disabled selected>載入中…</option>
             </select>
           </div>
-
-          <!-- 新增：全部中心切換與指標選擇 -->
-          <label class="switch" title="將同一天的所有中心疊在同一張圖上">
-            <input type="checkbox" id="allMode">
-            <span>顯示全部中心</span>
-          </label>
-          <div id="metricBox" style="display:none;">
-            <label for="metricSel" style="margin-right:6px;">指標：</label>
-            <select id="metricSel" class="select">
-              <option value="pool">游泳池</option>
-              <option value="gym">健身房</option>
-            </select>
-          </div>
         </div>
       </div>
 
@@ -111,7 +84,7 @@
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
     const REFRESH_MS = 600_000; // 10 分鐘
     const DAY_START = 6;  // 06:00
-    theDAY_END   = 22; // 到 22:59 都算（含 22）
+    const DAY_END   = 22; // 到 22:59 都算（含 22）
 
     function csvUrl() {
       const u = new URL(CSV_BASE);
@@ -153,26 +126,6 @@
     let rows = [];
     let currentCenter = DEFAULT_CENTER;  // 預設南屯
     let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
-    let allCentersMode = false;          // 是否顯示全部中心
-    let currentMetric = 'pool';          // 全部中心模式下顯示哪一個指標
-
-    // 彩虹色產生器（HSL）
-    function colorHSL(i, total, alpha=1) {
-      const h = Math.round((360 * i) / Math.max(1,total));
-      return `hsla(${h}, 75%, 60%, ${alpha})`;
-    }
-
-    // 建立單一中心兩條線的漸層（更活潑）
-    function buildSingleGradients(ctx) {
-      const g1 = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height);
-      g1.addColorStop(0, 'rgba(99, 102, 241, .6)'); // indigo-ish
-      g1.addColorStop(1, 'rgba(99, 102, 241, 0)');
-
-      const g2 = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height);
-      g2.addColorStop(0, 'rgba(16, 185, 129, .6)'); // emerald-ish
-      g2.addColorStop(1, 'rgba(16, 185, 129, 0)');
-      return { g1, g2 };
-    }
 
     async function fetchCSV() {
       const res = await fetch(csvUrl(), { cache: 'no-store' });
@@ -180,7 +133,9 @@
       const text = await res.text();
 
       const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-      if (parsed.errors?.length) console.warn('CSV parse warnings:', parsed.errors.slice(0,3));
+      if (parsed.errors?.length) {
+        console.warn('CSV parse warnings:', parsed.errors.slice(0,3));
+      }
 
       const tmp = [];
       for (const r of parsed.data) {
@@ -219,13 +174,11 @@
       sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
       if (!centers.includes(currentCenter)) currentCenter = centers[0];
       sel.value = currentCenter;
-      sel.disabled = allCentersMode; // 全部中心模式下不可選
     }
 
     function rebuildDateSelect() {
-      // 僅取「目前中心」的可用日期；全部中心模式下也以「目前中心」的日期列表做基準（通常各館日期相同）
-      const baseCenter = currentCenter || rows[0]?.center;
-      const dates = Array.from(new Set(rows.filter(r=>r.center===baseCenter).map(r=>r.isoDate)))
+      // 僅取當前中心的可用日期列表
+      const dates = Array.from(new Set(rows.filter(r=>r.center===currentCenter).map(r=>r.isoDate)))
         .sort((a,b)=> b.localeCompare(a)); // 由新到舊
       const sel = document.getElementById('dateSel');
       if (dates.length === 0) {
@@ -249,8 +202,8 @@
       }
     }
 
-    // 依中心 + 日期切片（單一中心）
-    function sliceForChartSingle() {
+    // 依中心 + 日期切片
+    function sliceForChart() {
       const filtered = rows.filter(r => r.center === currentCenter && r.isoDate === currentIsoDate);
       return {
         times: filtered.map(r=>r.t),
@@ -259,29 +212,10 @@
       };
     }
 
-    // 取得同一天所有中心的資料（全部中心模式）
-    function dataForAllCenters(metric='pool') {
-      const centers = Array.from(new Set(rows.map(r=>r.center))).filter(Boolean)
-        .sort((a,b)=>a.localeCompare(b,'zh-Hant'));
-      // 取得此日全域時間軸（取所有點的 union 再排序）
-      const times = Array.from(new Set(rows.filter(r=>r.isoDate===currentIsoDate).map(r=>r.t))).sort((a,b)=>a-b);
-
-      // 每個中心對齊時間軸（缺資料補 null）
-      const perCenter = centers.map(c=>{
-        const map = new Map(rows.filter(r=>r.center===c && r.isoDate===currentIsoDate).map(r=>[r.t, r[metric]]));
-        const series = times.map(t => map.has(t) ? map.get(t) : null);
-        return { center:c, series };
-      });
-      return { times, perCenter };
-    }
-
     // 更新頁面主標題
     function updateHeading() {
       const h1 = document.getElementById('pageTitle');
-      if (allCentersMode) {
-        const metricName = (currentMetric==='pool' ? '游泳池' : '健身房');
-        h1.textContent = `台中市各運動中心｜每日人數（全部中心：${metricName}）`;
-      } else if (currentCenter) {
+      if (currentCenter) {
         h1.textContent = `${currentCenter}｜每日人數`;
       } else {
         h1.textContent = `台中市各運動中心｜每日人數`;
@@ -294,25 +228,45 @@
       const ctx = document.getElementById('chart').getContext('2d');
       chart = new Chart(ctx, {
         type: 'line',
-        data: { labels: [], datasets: [] },
+        data: { labels: [], datasets: [
+          {
+            label: '游泳池人數',
+            data: [],
+            borderWidth: 3,
+            tension: 0.35,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            borderCapStyle: 'round',
+            borderJoinStyle: 'round',
+            borderColor: 'rgba(99,102,241,1)',      // indigo
+            backgroundColor: 'rgba(99,102,241,0.15)',
+            fill: 'origin'
+          },
+          {
+            label: '健身房人數',
+            data: [],
+            borderWidth: 3,
+            tension: 0.35,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            borderCapStyle: 'round',
+            borderJoinStyle: 'round',
+            borderColor: 'rgba(16,185,129,1)',      // emerald
+            backgroundColor: 'rgba(16,185,129,0.15)',
+            fill: 'origin'
+          }
+        ]},
         options: {
           responsive: true, maintainAspectRatio: false,
           interaction: { mode:'nearest', intersect:false },
-          animation: { duration: 800, easing: 'easeOutQuart' },
-          elements: { line: { borderJoinStyle:'round', borderCapStyle:'round' } },
+          animation: { duration: 700, easing: 'easeOutQuart' },
           plugins: {
             legend: { labels: { color:'#e5e7eb' } },
-            tooltip: {
-              callbacks: {
-                title: (items) => items.length
-                  ? luxon.DateTime.fromMillis(items[0].parsed.x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss')
-                  : '',
-                label: (item) => {
-                  const v = item.parsed.y;
-                  return `${item.dataset.label}：${(v==null?'—':v)} 人`;
-                }
-              }
-            }
+            tooltip: { callbacks: {
+              title: (items) => items.length
+                ? luxon.DateTime.fromMillis(items[0].parsed.x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss')
+                : ''
+            }}
           },
           scales: {
             x: {
@@ -334,65 +288,21 @@
 
     function applyAndRender() {
       const c = initChart();
-      const ctx = c.ctx.canvas.getContext('2d');
+      const { times, pool, gym } = sliceForChart();
+      c.data.labels = times;
+      c.data.datasets[0].data = pool;
+      c.data.datasets[1].data = gym;
+      c.update('none');
 
-      if (!allCentersMode) {
-        // 單一中心：兩條線（游泳池＋健身房），加面積淡填＋虛線辨識
-        const { times, pool, gym } = sliceForChartSingle();
-        const { g1, g2 } = buildSingleGradients(ctx);
-
-        c.data.labels = times;
-        c.data.datasets = [
-          { label: '游泳池人數', data: pool, borderWidth: 3, tension: 0.35, pointRadius: 2, pointHoverRadius: 5,
-            borderColor: 'rgba(99,102,241,1)', backgroundColor: g1, fill: 'origin' },
-          { label: '健身房人數', data: gym,  borderWidth: 3, tension: 0.35, pointRadius: 2, pointHoverRadius: 5,
-            borderColor: 'rgba(16,185,129,1)', backgroundColor: g2, fill: 'origin', borderDash:[6,6] }
-        ];
-        c.update();
-
-        // Header 數字
-        if (times.length) {
-          document.getElementById('poolNow').textContent = pool[pool.length-1];
-          document.getElementById('gymNow').textContent  = gym[gym.length-1];
-          document.getElementById('lastUpd').textContent =
-            luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
-        } else {
-          document.getElementById('poolNow').textContent = '—';
-          document.getElementById('gymNow').textContent  = '—';
-          document.getElementById('lastUpd').textContent = '—';
-        }
+      if (times.length) {
+        document.getElementById('poolNow').textContent = pool[pool.length-1];
+        document.getElementById('gymNow').textContent  = gym[gym.length-1];
+        document.getElementById('lastUpd').textContent =
+          luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
       } else {
-        // 全部中心：每個中心一條線（只選一種指標），自動彩色
-        const metricName = currentMetric==='pool' ? '游泳池' : '健身房';
-        const { times, perCenter } = dataForAllCenters(currentMetric);
-
-        c.data.labels = times;
-        c.data.datasets = perCenter.map((row, i, arr) => {
-          const col = colorHSL(i, arr.length, 1);
-          const fillCol = colorHSL(i, arr.length, .18);
-          return {
-            label: row.center + '（' + metricName + '）',
-            data: row.series,
-            borderColor: col,
-            backgroundColor: fillCol,
-            borderWidth: 2.5,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            tension: 0.3,
-            spanGaps: true, // 缺資料時不中斷軸
-          };
-        });
-        c.update();
-
-        // 多中心模式下頁首當前數字不具代表性，改為 —
         document.getElementById('poolNow').textContent = '—';
         document.getElementById('gymNow').textContent  = '—';
-        if (times.length) {
-          document.getElementById('lastUpd').textContent =
-            luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
-        } else {
-          document.getElementById('lastUpd').textContent = '—';
-        }
+        document.getElementById('lastUpd').textContent = '—';
       }
     }
 
@@ -415,24 +325,6 @@
     });
     document.getElementById('dateSel').addEventListener('change', (e)=>{
       currentIsoDate = e.target.value;
-      applyAndRender();
-    });
-
-    const allModeEl = document.getElementById('allMode');
-    const metricBox = document.getElementById('metricBox');
-    const metricSel = document.getElementById('metricSel');
-
-    allModeEl.addEventListener('change', ()=>{
-      allCentersMode = allModeEl.checked;
-      document.getElementById('centerSel').disabled = allCentersMode;
-      metricBox.style.display = allCentersMode ? 'inline-flex' : 'none';
-      updateHeading();
-      applyAndRender();
-    });
-
-    metricSel.addEventListener('change', (e)=>{
-      currentMetric = e.target.value; // pool | gym
-      updateHeading();
       applyAndRender();
     });
 
