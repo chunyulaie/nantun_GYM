@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>南屯運動中心｜即時人數</title>
+  <!-- Chart.js + Luxon 時間適配 -->
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
+  <style>
+    :root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; }
+    html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC", Arial; }
+    .wrap { max-width:1100px; margin:32px auto; padding:0 16px; }
+    .card { background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:20px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    h1 { margin:0 0 6px; font-weight:700; letter-spacing:.5px; }
+    .sub { color:var(--muted); margin:0 0 12px; font-size:14px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; }
+    .pill { padding:8px 12px; border-radius:999px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); font-size:14px; }
+    canvas { width:100%; height:420px; }
+    .footer { color:var(--muted); font-size:13px; margin-top:10px; }
+    a { color:#60a5fa; text-decoration: none; } a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>南屯運動中心｜即時人數</h1>
+      <p class="sub">來源：Google Sheet（CSV 發佈）→ Chart.js（每 10 分鐘更新）</p>
+      <div class="row">
+        <span class="pill">泳池 <b id="poolNow">—</b> 人</span>
+        <span class="pill">健身房 <b id="gymNow">—</b> 人</span>
+        <span class="pill">最後更新：<span id="lastUpd">—</span></span>
+      </div>
+      <canvas id="chart"></canvas>
+      <div class="footer">
+        自動每 <span id="freqText">600</span> 秒更新 · <a id="csvLink" target="_blank" rel="noopener">查看 CSV</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ======== 已替換你的設定 ========
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
+    const REFRESH_MS = 600_000; // 10 分鐘更新；想 1 分鐘改成 60_000
+    // =================================
+
+    document.getElementById('csvLink').href = CSV_URL;
+    document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
+
+    // 讀 CSV 並解析（表頭可為：時間/泳池人數/健身房人數 或 timestamp/pool/gym）
+    async function fetchCSV() {
+      const url = CSV_URL + (CSV_URL.includes('?') ? '&' : '?') + '_ts=' + Date.now(); // 防快取
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+
+      const lines = text.trim().split(/\r?\n/);
+      if (lines.length <= 1) return { labels: [], pool: [], gym: [] };
+
+      const header = lines[0].split(',').map(s => s.trim());
+      const idxTime = header.findIndex(h => /時間|timestamp/i.test(h));
+      const idxPool = header.findIndex(h => /泳池|pool/i.test(h));
+      const idxGym  = header.findIndex(h => /健身|gym/i.test(h));
+      if (idxTime < 0 || idxPool < 0 || idxGym < 0) throw new Error('欄位無法識別：' + header.join(','));
+
+      const labels = [];
+      const pool = [];
+      const gym  = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const row = lines[i];
+        if (!row.trim()) continue;
+        const cols = row.split(',');
+        const tStr = (cols[idxTime] || '').trim();
+        const pStr = (cols[idxPool] || '').trim();
+        const gStr = (cols[idxGym]  || '').trim();
+
+        // 時間字串 -> Date（支援 "yyyy-mm-dd HH:MM:SS"）
+        const t = Date.parse(tStr.replace(' ', 'T'));
+        if (isNaN(t)) continue;
+
+        labels.push(new Date(t));
+        pool.push(Number(pStr) || 0);
+        gym.push(Number(gStr) || 0);
+      }
+
+      // （可選）只顯示最近 24 小時：把下面註解打開即可
+      /*
+      const cutoff = Date.now() - 24*60*60*1000;
+      const tmp = [];
+      for (let i=0; i<labels.length; i++) {
+        const ms = labels[i].getTime();
+        if (ms >= cutoff) tmp.push({t:ms, p:pool[i], g:gym[i]});
+      }
+      return {
+        labels: tmp.map(x=>new Date(x.t)),
+        pool: tmp.map(x=>x.p),
+        gym:  tmp.map(x=>x.g),
+      };
+      */
+
+      return { labels, pool, gym };
+    }
+
+    // 初始化圖表
+    const ctx = document.getElementById('chart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [
+        { label: '泳池人數', data: [], borderWidth: 2, tension: 0.25, pointRadius: 0 },
+        { label: '健身房人數', data: [], borderWidth: 2, tension: 0.25, pointRadius: 0 },
+      ]},
+      options: {
+        responsive: true, maintainAspectRatio: false, interaction: { mode:'nearest', intersect:false },
+        plugins: {
+          legend: { labels: { color: '#e5e7eb' } },
+          tooltip: { callbacks: {
+            title: (items) => items.length ? luxon.DateTime.fromMillis(items[0].parsed.x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss') : ''
+          }}
+        },
+        scales: {
+          x: {
+            type: 'time',
+            time: { tooltipFormat:'MM/dd HH:mm', displayFormats:{ minute:'HH:mm', hour:'MM/dd HH:mm' } },
+            adapters: { date: { zone: 'Asia/Taipei' } },
+            ticks: { color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' }
+          },
+          y: {
+            beginAtZero:true, ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' },
+            title:{ display:true, text:'人數', color:'#e5e7eb' }
+          }
+        }
+      }
+    });
+
+    async function refresh() {
+      try {
+        const { labels, pool, gym } = await fetchCSV();
+        chart.data.labels = labels.map(d => d.getTime());
+        chart.data.datasets[0].data = pool;
+        chart.data.datasets[1].data = gym;
+        chart.update('none');
+
+        if (labels.length) {
+          document.getElementById('poolNow').textContent = pool[pool.length-1];
+          document.getElementById('gymNow').textContent  = gym[gym.length-1];
+          const dt = labels[labels.length-1];
+          document.getElementById('lastUpd').textContent =
+            luxon.DateTime.fromJSDate(dt).setZone('Asia/Taipei').toFormat('MM/dd HH:mm:ss');
+        }
+      } catch (e) { console.error(e); }
+    }
+
+    refresh();                    // 先載入一次
+    setInterval(refresh, REFRESH_MS); // 之後定時更新
+  </script>
+</body>
+</html>
