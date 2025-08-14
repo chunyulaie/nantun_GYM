@@ -133,7 +133,7 @@
     // - 只做水平裁切 + 淡入，不改變線條位置，效能穩
     const VineRevealPlugin = {
       id: 'vineReveal',
-      duration: 1200, // ms
+      duration: 1800, // ms
       afterInit(chart, args, opts) {
         this.restart(chart); // 初始即開啟
       },
@@ -165,7 +165,7 @@
         ctx.clip();
 
         // 線條與填色淡入（不影響 tooltip）
-        ctx.globalAlpha = 0.6 + 0.4 * ease;
+        ctx.globalAlpha = 0.4 + 0.6 * ease;
         chart.$vineClipped = true;
       },
       afterDatasetsDraw(chart) {
