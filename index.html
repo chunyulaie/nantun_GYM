@@ -3,11 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>台中市各運動中心｜即時人數（多中心）</title>
-  <!-- Chart.js + Luxon（時間軸） -->
+  <title>南屯運動中心｜即時人數（多中心）</title>
+
+  <!-- Luxon + Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
+  <!-- ！！新增：PapaParse，可靠解析 Google Sheet CSV（含引號/逗號） -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
   <style>
     :root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; --accent:#2563eb; }
     html,body { height:100%; margin:0; background:var(--bg); color:var(--fg);
@@ -71,7 +75,9 @@
 
         <div>
           <label for="centerSel" style="margin-right:6px;">運動中心：</label>
-          <select id="centerSel" class="select"></select>
+          <select id="centerSel" class="select">
+            <option value="" disabled selected>載入中…</option>
+          </select>
         </div>
       </div>
 
@@ -85,18 +91,14 @@
   </div>
 
   <script>
-    // === 你的設定 ===
-    // 1) 把下面這個 gid 換成 Google Sheet「all_centers」分頁的實際 gid 數字
-    const SHEET_GID_ALL_CENTERS = '840629068';
-    // 2) 你的已發佈 CSV 基底網址（不用帶 gid）
+    // === 設定 ===
+    const DEFAULT_CENTER = '南屯運動中心'; // 預設進站就顯示這個
+    const SHEET_GID_ALL_CENTERS = '840629068'; // 你剛剛提供的 gid
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
-    // 3) 更新頻率
-    const REFRESH_MS = 600_000; // 10 分鐘；要 1 分鐘改 60_000
+    const REFRESH_MS = 600_000; // 10 分鐘
 
-    // === 動態產生 CSV 連結（指向 all_centers 分頁） ===
     function csvUrl() {
       const u = new URL(CSV_BASE);
-      // Published CSV 支援用 gid 指定分頁
       u.searchParams.set('gid', SHEET_GID_ALL_CENTERS);
       u.searchParams.set('_ts', Date.now()); // 防快取
       return u.toString();
@@ -104,7 +106,7 @@
     document.getElementById('csvLink').href = csvUrl();
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
 
-    // 解析「2025/8/14 上午 9:01:16」→ 毫秒（台北時區）
+    // 解析台北時區時間
     function parseTWDateMs(tStr) {
       const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
       let dt =
@@ -120,60 +122,61 @@
       return dt.isValid ? dt.toMillis() : NaN;
     }
 
-    // 全部原始列（多中心）
+    // 欄位對應（容錯多種命名）
+    function pick(obj, keysRegex) {
+      for (const k of Object.keys(obj)) {
+        const nk = k.replace(/\ufeff/g,'').trim(); // 去掉 BOM/空白
+        if (keysRegex.test(nk)) return obj[k];
+      }
+      return undefined;
+    }
+    const RX_TIME   = /(時間|timestamp)/i;
+    const RX_CENTER = /(中心|運動中心|館|場館|館別|中心名稱|center)/i;
+    const RX_POOL   = /(泳池|pool|swim)/i;
+    const RX_GYM    = /(健身|健身房|gym|weight)/i;
+
     /** @type {{t:number, center:string, pool:number, gym:number}[]} */
     let rows = [];
+    let currentRange = '24h';
+    let currentCenter = DEFAULT_CENTER;  // 預設南屯
+    let onlyDaytime = false;
 
-    // 篩選狀態
-    let currentRange = '24h';   // 24h / 7d / all
-    let currentCenter = '';     // 由 CSV 載入後填入第一個中心
-    let onlyDaytime = false;    // 是否只看 06–22
-
-    // 讀 CSV（all_centers）
     async function fetchCSV() {
       const res = await fetch(csvUrl(), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = await res.text();
-      const lines = text.trim().split(/\r?\n/);
-      if (lines.length <= 1) { rows = []; return; }
 
-      // 找欄位
-      const header = lines[0].split(',').map(s => s.trim());
-      const idxTime   = header.findIndex(h => /時間|timestamp/i.test(h));
-      const idxCenter = header.findIndex(h => /中心|館|場館|center/i.test(h));
-      const idxPool   = header.findIndex(h => /泳池|pool/i.test(h));
-      const idxGym    = header.findIndex(h => /健身|gym/i.test(h));
-      if (idxTime < 0 || idxCenter < 0 || idxPool < 0 || idxGym < 0) {
-        throw new Error('欄位無法識別：' + header.join(','));
+      const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+      if (parsed.errors?.length) {
+        console.warn('CSV parse warnings:', parsed.errors.slice(0,3));
       }
-
       const tmp = [];
-      for (let i=1;i<lines.length;i++){
-        const row = lines[i];
-        if (!row.trim()) continue;
-        const cols = row.split(',');
-        const tMs = parseTWDateMs((cols[idxTime]||'').trim());
-        if (Number.isNaN(tMs)) continue;
-        const center = (cols[idxCenter]||'').trim();
-        const pool   = Number((cols[idxPool]||'').trim()) || 0;
-        const gym    = Number((cols[idxGym] ||'').trim()) || 0;
-        tmp.push({ t:tMs, center, pool, gym });
+      for (const r of parsed.data) {
+        const tStr   = pick(r, RX_TIME);
+        const center = (pick(r, RX_CENTER) ?? '').toString().trim();
+        const pool   = Number((pick(r, RX_POOL) ?? '').toString().trim()) || 0;
+        const gym    = Number((pick(r, RX_GYM)  ?? '').toString().trim()) || 0;
+        const t = parseTWDateMs((tStr ?? '').toString().trim());
+        if (!center || Number.isNaN(t)) continue;
+        tmp.push({ t, center, pool, gym });
       }
-      // 依時間排序（避免亂序）
       tmp.sort((a,b)=>a.t-b.t);
       rows = tmp;
 
-      // 填入中心下拉
-      const centers = Array.from(new Set(rows.map(r=>r.center))).filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+      // 更新中心下拉
+      const centers = Array.from(new Set(rows.map(r=>r.center))).filter(Boolean)
+        .sort((a,b)=>a.localeCompare(b,'zh-Hant'));
       const sel = document.getElementById('centerSel');
-      sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
-      if (!currentCenter || !centers.includes(currentCenter)) {
-        currentCenter = centers[0] || '';
+      if (centers.length === 0) {
+        sel.innerHTML = `<option value="" disabled selected>（找不到資料）</option>`;
+        return;
       }
+      sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
+      // 進站預設為南屯；若表內沒有南屯，改選第一個
+      if (!centers.includes(currentCenter)) currentCenter = centers[0];
       sel.value = currentCenter;
     }
 
-    // 依「中心、區間（24h/7d/all）、06–22」做篩選，回傳 times/pool/gym
     function sliceForChart() {
       let filtered = rows.filter(r => r.center === currentCenter);
       if (onlyDaytime) {
@@ -195,7 +198,6 @@
       };
     }
 
-    // 只建立一次 Chart
     let chart;
     function initChart() {
       if (chart) return chart;
@@ -218,17 +220,13 @@
             }}
           },
           scales: {
-            x: {
-              type:'time',
+            x: { type:'time',
               time:{ tooltipFormat:'MM/dd HH:mm', displayFormats:{ minute:'HH:mm', hour:'MM/dd HH:mm' } },
               adapters:{ date:{ zone:'Asia/Taipei' } },
-              ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' }
-            },
-            y: {
-              beginAtZero:true,
+              ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' } },
+            y: { beginAtZero:true,
               ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' },
-              title:{ display:true, text:'人數', color:'#e5e7eb' }
-            }
+              title:{ display:true, text:'人數', color:'#e5e7eb' } }
           }
         }
       });
@@ -254,7 +252,6 @@
         document.getElementById('lastUpd').textContent = '—';
       }
 
-      // 切換按鈕樣式
       document.querySelectorAll('.btn').forEach(b=>{
         b.classList.toggle('active', b.dataset.range === currentRange);
       });
@@ -264,7 +261,6 @@
       try {
         await fetchCSV();
         applyAndRender();
-        // 更新 footer 的 CSV 連結（帶最新 _ts）
         document.getElementById('csvLink').href = csvUrl();
       } catch (e) {
         console.error(e);
@@ -282,7 +278,8 @@
       currentCenter = e.target.value; applyAndRender();
     });
 
-    // 初始化
+    // 初始化：先把「南屯運動中心」設為預設中心
+    currentCenter = DEFAULT_CENTER;
     initChart();
     refresh();
     setInterval(refresh, REFRESH_MS);
