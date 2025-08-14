@@ -9,7 +9,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
   <style>
-    :root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; }
+    :root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; --accent:#2563eb; }
     html,body { height:100%; margin:0; background:var(--bg); color:var(--fg);
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC", Arial; }
     .wrap { max-width:1100px; margin:32px auto; padding:0 16px; }
@@ -18,9 +18,16 @@
       box-shadow:0 10px 30px rgba(0,0,0,.25); }
     h1 { margin:0 0 6px; font-weight:700; letter-spacing:.5px; }
     .sub { color:var(--muted); margin:0 0 12px; font-size:14px; }
-    .row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; align-items:center; }
     .pill { padding:8px 12px; border-radius:999px; background:rgba(255,255,255,.06);
       border:1px solid rgba(255,255,255,.1); font-size:14px; }
+    .filters { display:flex; gap:8px; flex-wrap:wrap; }
+    .btn {
+      padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
+      background:rgba(255,255,255,.06); color:var(--fg); cursor:pointer; font-size:14px;
+    }
+    .btn.active { background:var(--accent); border-color:var(--accent); }
+    .btn:active { transform: translateY(1px); }
     .footer { color:var(--muted); font-size:13px; margin-top:10px; }
     a { color:#60a5fa; text-decoration:none; } a:hover{ text-decoration:underline; }
     .chart-wrap{ height:420px; position:relative; }
@@ -32,26 +39,38 @@
     <div class="card">
       <h1>南屯運動中心｜即時人數</h1>
       <p class="sub">來源：Google Sheet（CSV 發佈）→ Chart.js（定時更新）</p>
+
       <div class="row">
         <span class="pill">泳池 <b id="poolNow">—</b> 人</span>
         <span class="pill">健身房 <b id="gymNow">—</b> 人</span>
         <span class="pill">最後更新：<span id="lastUpd">—</span></span>
       </div>
+
+      <div class="row" style="margin-top:0;">
+        <div class="filters">
+          <button class="btn" data-range="24h">最近 24 小時</button>
+          <button class="btn" data-range="7d">最近 7 天</button>
+          <button class="btn" data-range="all">全部</button>
+        </div>
+      </div>
+
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
+
       <div class="footer">
-        每 <span id="freqText">600</span> 秒自動更新 · <a id="csvLink" target="_blank" rel="noopener">查看 CSV</a>
+        每 <span id="freqText">600</span> 秒自動更新 ·
+        <a id="csvLink" target="_blank" rel="noopener">查看 CSV</a>
       </div>
     </div>
   </div>
 
   <script>
-    // === 換成你的 CSV 連結 ===
+    // === 你的設定（CSV 連結 & 更新頻率） ===
     const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
-    const REFRESH_MS = 600_000; // 10 分鐘
+    const REFRESH_MS = 600_000; // 10 分鐘；要 1 分鐘改 60_000
     document.getElementById('csvLink').href = CSV_URL;
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
 
-    // 解析「2025/8/14 上午 9:01:16」→ 毫秒時間戳（台北時區）
+    // 解析「2025/8/14 上午 9:01:16」→ 毫秒（台北時區）
     function parseTWDateMs(tStr) {
       const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
       let dt =
@@ -65,6 +84,7 @@
       return dt.isValid ? dt.toMillis() : NaN;
     }
 
+    // 讀 CSV
     async function fetchCSV() {
       const url = CSV_URL + (CSV_URL.includes('?') ? '&' : '?') + '_ts=' + Date.now(); // 防快取
       const res = await fetch(url, { cache: 'no-store' });
@@ -86,12 +106,25 @@
         if (!row.trim()) continue;
         const cols = row.split(',');
         const tMs = parseTWDateMs((cols[idxTime] || '').trim());
-        if (Number.isNaN(tMs)) continue; // 時間不合法就跳過
+        if (Number.isNaN(tMs)) continue; // 跳過無效時間
         times.push(tMs);
         pool.push(Number((cols[idxPool] || '').trim()) || 0);
         gym.push(Number((cols[idxGym]  || '').trim()) || 0);
       }
       return { times, pool, gym };
+    }
+
+    // 篩選（24h / 7d / all）
+    function filterByRange(times, pool, gym, range) {
+      if (range === 'all') return { times, pool, gym };
+      const now = Date.now();
+      const span = range === '24h' ? 24*60*60*1000 : 7*24*60*60*1000;
+      const cutoff = now - span;
+      const t = [], p = [], g = [];
+      for (let i=0;i<times.length;i++){
+        if (times[i] >= cutoff){ t.push(times[i]); p.push(pool[i]); g.push(gym[i]); }
+      }
+      return { times: t, pool: p, gym: g };
     }
 
     // 只建立一次 Chart
@@ -134,28 +167,52 @@
       return chart;
     }
 
-    initChart();
+    // 狀態
+    let rawTimes = [], rawPool = [], rawGym = [];
+    let currentRange = '24h'; // 預設顯示「最近 24 小時」
 
+    // 套用篩選並更新圖表
+    function applyAndRender() {
+      const c = initChart();
+      const { times, pool, gym } = filterByRange(rawTimes, rawPool, rawGym, currentRange);
+      c.data.labels = times;
+      c.data.datasets[0].data = pool;
+      c.data.datasets[1].data = gym;
+      c.update('none');
+
+      if (times.length) {
+        document.getElementById('poolNow').textContent = pool[pool.length-1];
+        document.getElementById('gymNow').textContent  = gym[gym.length-1];
+        document.getElementById('lastUpd').textContent =
+          luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('MM/dd HH:mm:ss');
+      }
+      // 切換按鈕樣式
+      document.querySelectorAll('.btn').forEach(b=>{
+        b.classList.toggle('active', b.dataset.range === currentRange);
+      });
+    }
+
+    // 載入資料 + 定時刷新
     async function refresh() {
       try {
         const { times, pool, gym } = await fetchCSV();
-        const c = initChart();
-        c.data.labels = times;           // 直接塞毫秒
-        c.data.datasets[0].data = pool;
-        c.data.datasets[1].data = gym;
-        c.update('none');
-
-        if (times.length) {
-          document.getElementById('poolNow').textContent = pool[pool.length-1];
-          document.getElementById('gymNow').textContent  = gym[gym.length-1];
-          document.getElementById('lastUpd').textContent =
-            luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('MM/dd HH:mm:ss');
-        }
+        rawTimes = times; rawPool = pool; rawGym = gym;
+        applyAndRender();
       } catch (e) { console.error(e); }
     }
 
-    refresh();                    // 先載入一次
-    setInterval(refresh, REFRESH_MS); // 定時更新
+    // 綁定按鈕
+    document.querySelectorAll('.btn').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        currentRange = b.dataset.range;
+        applyAndRender();
+      });
+    });
+
+    // 初始化
+    initChart();
+    refresh();
+    setInterval(refresh, REFRESH_MS);
   </script>
 </body>
 </html>
