@@ -127,70 +127,58 @@
     let currentCenter = DEFAULT_CENTER;  // 預設南屯
     let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
 
-    // ====== 自訂插件：藤蔓生成 + 線條跳動 + 流動虛線 ======
-    const VineAndWigglePlugin = {
-      id: 'vineWiggle',
-      startTime: 0,
-      revealMs: 1400,             // 藤蔓生成動畫長度
-      afterInit(chart) {
-        this.startTime = performance.now();
-        chart.canvas.addEventListener('mouseenter', ()=> chart._hovering = true);
-        chart.canvas.addEventListener('mouseleave', ()=> chart._hovering = false);
+    // ====== 穩定版「藤蔓生成」插件（無跳動）======
+    // 特色：
+    // - 使用 requestAnimationFrame 主動重繪直到完成，避免卡住
+    // - 只做水平裁切 + 淡入，不改變線條位置，效能穩
+    const VineRevealPlugin = {
+      id: 'vineReveal',
+      duration: 1200, // ms
+      afterInit(chart, args, opts) {
+        this.restart(chart); // 初始即開啟
       },
-      beforeDatasetsDraw(chart, args, pluginOptions) {
-        const {ctx, chartArea, scales} = chart;
-        const now = performance.now();
-        const t = Math.min(1, (now - this.startTime) / this.revealMs);
-        // easeOutCubic
-        const ease = 1 - Math.pow(1 - t, 3);
-
-        // 1) 藤蔓生成：用裁切區域由左到右展開
-        ctx.save();
+      restart(chart) {
+        // 取消前一輪 RAF
+        if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF);
+        chart.$vineStart = performance.now();
+        chart.$vineProgress = 0;
+        const tick = () => {
+          const now = performance.now();
+          const t = Math.min(1, (now - chart.$vineStart) / (this.duration || 1200));
+          chart.$vineProgress = t;
+          chart.draw();                 // 主動要求重繪
+          if (t < 1) chart.$vineRAF = requestAnimationFrame(tick);
+        };
+        chart.$vineRAF = requestAnimationFrame(tick);
+      },
+      beforeDatasetsDraw(chart) {
+        const t = chart.$vineProgress ?? 1;
+        if (t >= 1) return; // 完成就不裁切
+        const {ctx, chartArea} = chart;
+        const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
         const w = chartArea.right - chartArea.left;
         const h = chartArea.bottom - chartArea.top;
+
+        ctx.save();
         ctx.beginPath();
         ctx.rect(chartArea.left, chartArea.top, w * ease, h);
         ctx.clip();
 
-        // 2) 線條跳動/發光：在 datasets 繪製前，設置全域陰影（呼吸感）
-        const hovering = !!chart._hovering;
-        const amp = hovering ? 8 : 3;                 // 陰影強度
-        const pulse = 0.5 + 0.5 * Math.sin(now / 400);
-        ctx.shadowColor = `rgba(96,165,250,${0.25 * pulse})`;
-        ctx.shadowBlur = amp * pulse;
-      },
-      beforeDatasetDraw(chart, args, pluginOptions) {
-        // 3) 整條線微幅上下位移（跳動感）；滑鼠 hover 時加大
-        const now = performance.now();
-        const hovering = !!chart._hovering;
-        const ampPx = hovering ? 1.2 : 0.5;          // 位移幅度（像素）
-        const offset = Math.sin((now / 500) + args.index) * ampPx;
-
-        const {ctx} = chart;
-        ctx.save();
-        ctx.translate(0, offset);
-
-        // 4) 滑鼠 hover 時啟動流動虛線
-        if (hovering) {
-          // 僅讓「健身房」那條變成流動虛線，有辨識度（index 1）
-          if (args.index === 1) {
-            const dash = [6, 6];
-            ctx.setLineDash(dash);
-            ctx.lineDashOffset = - (now / 40) % 12;
-          }
-          // 也可以讓兩條都流動：把上面 if 拿掉即可
-        }
-      },
-      afterDatasetDraw(chart, args, pluginOptions) {
-        const {ctx} = chart;
-        ctx.restore();  // 還原 translate / dash 設定
+        // 線條與填色淡入（不影響 tooltip）
+        ctx.globalAlpha = 0.6 + 0.4 * ease;
+        chart.$vineClipped = true;
       },
       afterDatasetsDraw(chart) {
-        const {ctx} = chart;
-        ctx.restore(); // 結束 clip + 陰影
+        if (chart.$vineClipped) {
+          chart.ctx.restore();
+          chart.$vineClipped = false;
+        }
+      },
+      destroy(chart) {
+        if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF);
       }
     };
-    Chart.register(VineAndWigglePlugin);
+    Chart.register(VineRevealPlugin);
 
     async function fetchCSV() {
       const res = await fetch(csvUrl(), { cache: 'no-store' });
@@ -198,9 +186,7 @@
       const text = await res.text();
 
       const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-      if (parsed.errors?.length) {
-        console.warn('CSV parse warnings:', parsed.errors.slice(0,3));
-      }
+      if (parsed.errors?.length) console.warn('CSV parse warnings:', parsed.errors.slice(0,3));
 
       const tmp = [];
       for (const r of parsed.data) {
@@ -324,7 +310,7 @@
         options: {
           responsive: true, maintainAspectRatio: false,
           interaction: { mode:'nearest', intersect:false },
-          animation: { duration: 700, easing: 'easeOutQuart' },
+          animation: { duration: 700, easing: 'easeOutQuart' }, // Chart.js 自己的補間
           plugins: {
             legend: { labels: { color:'#e5e7eb' } },
             tooltip: { callbacks: {
@@ -358,10 +344,13 @@
       c.data.datasets[0].data = pool;
       c.data.datasets[1].data = gym;
 
-      // 重新啟動「藤蔓生成」動畫（切換中心/日期時）
-      const plugin = Chart.registry.getPlugin('vineWiggle');
-      if (plugin) plugin.startTime = performance.now();
+      // 重新啟動「藤蔓生成」動畫（每次換中心/日期或重新抓資料時）
+      const plugin = Chart.registry.getPlugin('vineReveal');
+      if (plugin && typeof plugin.restart === 'function') {
+        plugin.restart(c);
+      }
 
+      // 用 'none' 讓我們的 RAF 控制重繪，不跟 Chart.js 內建動畫衝突
       c.update('none');
 
       if (times.length) {
