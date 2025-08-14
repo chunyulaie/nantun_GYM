@@ -25,44 +25,25 @@
     .row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; align-items:center; }
     .pill { padding:8px 12px; border-radius:999px; background:rgba(255,255,255,.06);
       border:1px solid rgba(255,255,255,.1); font-size:14px; }
-    .filters { display:flex; gap:12px; flex-wrap:wrap; }
-    .btn {
-      padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
-      background:rgba(255,255,255,.06); color:var(--fg); cursor:pointer; font-size:14px;
-    }
-    .btn.active { background:var(--accent); border-color:var(--accent); }
-    .btn:active { transform: translateY(1px); }
     .footer { color:var(--muted); font-size:13px; margin-top:10px; }
     a { color:#60a5fa; text-decoration:none; } a:hover{ text-decoration:underline; }
     .chart-wrap{ height:420px; position:relative; }
     canvas{ position:absolute; inset:0; width:100% !important; height:100% !important; display:block; }
+
     select, label { font-size:14px; }
-
-    .switch {
-      display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:10px;
-      border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06);
-    }
-
-    /* 下拉（收合狀態）沿用深色主題 */
     .select {
       padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
       background:rgba(255,255,255,.06); color:var(--fg);
       appearance:auto;
     }
-    /* 下拉展開的選項列表（避免白底白字看不到） */
-    .select option {
-      background-color:#fff;  /* 展開列表白底 */
-      color:#000;             /* 黑字 */
-    }
-    /* 如果想展開也維持暗色，可改成：
-       .select option { background:#1f2937; color:#f9fafb; } */
+    .select option { background:#fff; color:#000; } /* 展開列表白底黑字，避免看不到 */
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <h1 id="pageTitle">南屯運動中心｜每日人數</h1>
-      <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新）</p>
+      <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新） · 固定只顯示 06:00–22:00</p>
 
       <div class="row">
         <span class="pill">泳池 <b id="poolNow">—</b> 人</span>
@@ -71,31 +52,26 @@
       </div>
 
       <div class="row" style="margin-top:0;">
-        <div class="filters">
-          <button class="btn" data-range="24h">最近 24 小時</button>
-          <button class="btn" data-range="7d">最近 7 天</button>
-          <button class="btn" data-range="all">全部</button>
-        </div>
-
-        <div style="flex:1"></div>
-
-        <label class="switch" title="只顯示 06:00–22:00 的資料">
-          <input type="checkbox" id="onlyDaytime" />
-          <span>只看 06–22</span>
-        </label>
-
-        <div>
-          <label for="centerSel" style="margin-right:6px;">運動中心：</label>
-          <select id="centerSel" class="select">
-            <option value="" disabled selected>載入中…</option>
-          </select>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <div>
+            <label for="centerSel" style="margin-right:6px;">運動中心：</label>
+            <select id="centerSel" class="select">
+              <option value="" disabled selected>載入中…</option>
+            </select>
+          </div>
+          <div>
+            <label for="dateSel" style="margin-right:6px;">日期：</label>
+            <select id="dateSel" class="select">
+              <option value="" disabled selected>載入中…</option>
+            </select>
+          </div>
         </div>
       </div>
 
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
 
       <div class="footer">
-        每 <span id="freqText">600</span> 秒自動更新 ·
+        只統計每日 06:00–22:00 · 每 <span id="freqText">600</span> 秒自動更新 ·
         <a id="csvLink" target="_blank" rel="noopener">查看 CSV</a>
       </div>
     </div>
@@ -107,6 +83,8 @@
     const SHEET_GID_ALL_CENTERS = '840629068';    // all_centers 的 gid
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
     const REFRESH_MS = 600_000; // 10 分鐘
+    const DAY_START = 6;  // 06:00
+    const DAY_END   = 22; // 到 22:59 都算（含 22）
 
     function csvUrl() {
       const u = new URL(CSV_BASE);
@@ -144,11 +122,10 @@
     const RX_POOL   = /(泳池|pool|swim)/i;
     const RX_GYM    = /(健身|健身房|gym|weight)/i;
 
-    /** @type {{t:number, center:string, pool:number, gym:number}[]} */
+    /** @type {{t:number, center:string, pool:number, gym:number, isoDate:string}[]} */
     let rows = [];
-    let currentRange = '24h';
     let currentCenter = DEFAULT_CENTER;  // 預設南屯
-    let onlyDaytime = false;
+    let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
 
     async function fetchCSV() {
       const res = await fetch(csvUrl(), { cache: 'no-store' });
@@ -168,41 +145,66 @@
         const gym    = Number((pick(r, RX_GYM)  ?? '').toString().trim()) || 0;
         const t = parseTWDateMs(tStr);
         if (!center || Number.isNaN(t)) continue;
-        tmp.push({ t, center, pool, gym });
+
+        // 以台北時區取「日期字串」
+        const dt = luxon.DateTime.fromMillis(t).setZone('Asia/Taipei');
+        const h  = dt.hour;
+        if (h < DAY_START || h > DAY_END) continue;  // 固定只看 06–22
+        const isoDate = dt.toISODate(); // yyyy-MM-dd
+
+        tmp.push({ t, center, pool, gym, isoDate });
       }
       tmp.sort((a,b)=>a.t-b.t);
       rows = tmp;
 
-      // 更新中心下拉
+      rebuildCenterSelect();
+      rebuildDateSelect();
+      ensureDefaults();
+      updateHeading();
+    }
+
+    function rebuildCenterSelect() {
       const centers = Array.from(new Set(rows.map(r=>r.center))).filter(Boolean)
         .sort((a,b)=>a.localeCompare(b,'zh-Hant'));
       const sel = document.getElementById('centerSel');
       if (centers.length === 0) {
         sel.innerHTML = `<option value="" disabled selected>（找不到資料）</option>`;
-        updateHeading(); // 沒資料也更新一次標題
         return;
       }
       sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
       if (!centers.includes(currentCenter)) currentCenter = centers[0];
       sel.value = currentCenter;
-
-      updateHeading();
     }
 
+    function rebuildDateSelect() {
+      // 僅取當前中心的可用日期列表
+      const dates = Array.from(new Set(rows.filter(r=>r.center===currentCenter).map(r=>r.isoDate)))
+        .sort((a,b)=> b.localeCompare(a)); // 由新到舊
+      const sel = document.getElementById('dateSel');
+      if (dates.length === 0) {
+        sel.innerHTML = `<option value="" disabled selected>（此中心無資料）</option>`;
+        currentIsoDate = '';
+        return;
+      }
+      sel.innerHTML = dates.map(d=>`<option value="${d}">${d}</option>`).join('');
+      if (!dates.includes(currentIsoDate)) currentIsoDate = dates[0]; // 預設最新一天
+      sel.value = currentIsoDate;
+    }
+
+    function ensureDefaults() {
+      if (!currentCenter) {
+        const any = rows[0]?.center;
+        if (any) currentCenter = any;
+      }
+      if (!currentIsoDate) {
+        const any = rows.find(r=>r.center===currentCenter)?.isoDate;
+        if (any) currentIsoDate = any;
+      }
+    }
+
+    // 依中心 + 日期切片
     function sliceForChart() {
-      let filtered = rows.filter(r => r.center === currentCenter);
-      if (onlyDaytime) {
-        filtered = filtered.filter(r => {
-          const h = luxon.DateTime.fromMillis(r.t).setZone('Asia/Taipei').hour;
-          return h >= 6 && h <= 22;
-        });
-      }
-      if (currentRange !== 'all') {
-        const now = Date.now();
-        const span = currentRange === '24h' ? 24*60*60*1000 : 7*24*60*60*1000;
-        const cutoff = now - span;
-        filtered = filtered.filter(r => r.t >= cutoff);
-      }
+      const filtered = rows.filter(r => r.center === currentCenter && r.isoDate === currentIsoDate);
       return {
         times: filtered.map(r=>r.t),
         pool:  filtered.map(r=>r.pool),
@@ -210,7 +212,7 @@
       };
     }
 
-    // 更新頁面主標題（依選擇的中心）
+    // 更新頁面主標題
     function updateHeading() {
       const h1 = document.getElementById('pageTitle');
       if (currentCenter) {
@@ -271,16 +273,12 @@
         document.getElementById('poolNow').textContent = pool[pool.length-1];
         document.getElementById('gymNow').textContent  = gym[gym.length-1];
         document.getElementById('lastUpd').textContent =
-          luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('MM/dd HH:mm:ss');
+          luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
       } else {
         document.getElementById('poolNow').textContent = '—';
         document.getElementById('gymNow').textContent  = '—';
         document.getElementById('lastUpd').textContent = '—';
       }
-
-      document.querySelectorAll('.btn').forEach(b=>{
-        b.classList.toggle('active', b.dataset.range === currentRange);
-      });
     }
 
     async function refresh() {
@@ -294,15 +292,14 @@
     }
 
     // 綁定 UI
-    document.querySelectorAll('.btn').forEach(b=>{
-      b.addEventListener('click', ()=>{ currentRange = b.dataset.range; applyAndRender(); });
-    });
-    document.getElementById('onlyDaytime').addEventListener('change', (e)=>{
-      onlyDaytime = !!e.target.checked; applyAndRender();
-    });
     document.getElementById('centerSel').addEventListener('change', (e)=>{
       currentCenter = e.target.value;
       updateHeading();
+      rebuildDateSelect();   // 依中心重建日期清單
+      applyAndRender();
+    });
+    document.getElementById('dateSel').addEventListener('change', (e)=>{
+      currentIsoDate = e.target.value;
       applyAndRender();
     });
 
