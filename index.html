@@ -9,7 +9,7 @@
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
-  <!-- ！！新增：PapaParse，可靠解析 Google Sheet CSV（含引號/逗號） -->
+  <!-- 可靠解析 Google Sheet CSV -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <style>
@@ -24,7 +24,7 @@
     .sub { color:var(--muted); margin:0 0 12px; font-size:14px; }
     .row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; align-items:center; }
     .pill { padding:8px 12px; border-radius:999px; background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.1); font-size:14px; }
+      border:1px solid rgba(255,255,白,.1); font-size:14px; }
     .filters { display:flex; gap:8px; flex-wrap:wrap; }
     .btn {
       padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
@@ -37,14 +37,25 @@
     .chart-wrap{ height:420px; position:relative; }
     canvas{ position:absolute; inset:0; width:100% !important; height:100% !important; display:block; }
     select, label { font-size:14px; }
+
     .switch {
       display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:10px;
       border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06);
     }
+
+    /* 下拉（收合狀態）沿用深色主題 */
     .select {
       padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
       background:rgba(255,255,255,.06); color:var(--fg);
+      appearance:auto;
     }
+    /* 下拉展開的選項列表（避免白底白字看不到） */
+    .select option {
+      background-color:#fff;  /* 展開列表白底 */
+      color:#000;             /* 黑字 */
+    }
+    /* 若想展開也維持暗色，改成：#1f2937 與 #f9fafb */
+    /* .select option{ background:#1f2937; color:#f9fafb; } */
   </style>
 </head>
 <body>
@@ -92,8 +103,8 @@
 
   <script>
     // === 設定 ===
-    const DEFAULT_CENTER = '南屯運動中心'; // 預設進站就顯示這個
-    const SHEET_GID_ALL_CENTERS = '840629068'; // 你剛剛提供的 gid
+    const DEFAULT_CENTER = '南屯運動中心';        // 預設顯示
+    const SHEET_GID_ALL_CENTERS = '840629068';    // all_centers 的 gid
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
     const REFRESH_MS = 600_000; // 10 分鐘
 
@@ -106,43 +117,42 @@
     document.getElementById('csvLink').href = csvUrl();
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
 
-    // 解析台北時區時間
+    // 解析台北時區時間（支援你的 yyyy-MM-dd HH:mm:ss）
     function parseTWDateMs(tStr) {
       const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
       let dt;
-    
-      // 1) 你現在的格式：yyyy-MM-dd HH:mm:ss
+
+      // 1) 目前你 CSV 的主要格式
       dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm:ss', opts);
       if (dt.isValid) return dt.toMillis();
-    
-      // 2) 沒秒數：yyyy-MM-dd HH:mm
+
+      // 2) 沒秒數
       dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm', opts);
       if (dt.isValid) return dt.toMillis();
-    
+
       // 3) 斜線格式
       dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);
       if (dt.isValid) return dt.toMillis();
       dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);
       if (dt.isValid) return dt.toMillis();
-    
+
       // 4) 含上/下午
       dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);
       if (dt.isValid) return dt.toMillis();
       dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);
       if (dt.isValid) return dt.toMillis();
-    
-      // 5) ISO 類型（帶 T）
+
+      // 5) ISO
       dt = luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });
       if (dt.isValid) return dt.toMillis();
-    
+
       return NaN;
     }
 
-
-    // 欄位對應（容錯多種命名）
+    // 欄位對應（容錯多種命名 + 去掉 BOM）
     function pick(obj, keysRegex) {
       for (const k of Object.keys(obj)) {
-        const nk = k.replace(/\ufeff/g,'').trim(); // 去掉 BOM/空白
+        const nk = k.replace(/\ufeff/g,'').trim();
         if (keysRegex.test(nk)) return obj[k];
       }
       return undefined;
@@ -167,13 +177,14 @@
       if (parsed.errors?.length) {
         console.warn('CSV parse warnings:', parsed.errors.slice(0,3));
       }
+
       const tmp = [];
       for (const r of parsed.data) {
-        const tStr   = pick(r, RX_TIME);
+        const tStr   = (pick(r, RX_TIME)   ?? '').toString().trim();
         const center = (pick(r, RX_CENTER) ?? '').toString().trim();
         const pool   = Number((pick(r, RX_POOL) ?? '').toString().trim()) || 0;
         const gym    = Number((pick(r, RX_GYM)  ?? '').toString().trim()) || 0;
-        const t = parseTWDateMs((tStr ?? '').toString().trim());
+        const t = parseTWDateMs(tStr);
         if (!center || Number.isNaN(t)) continue;
         tmp.push({ t, center, pool, gym });
       }
@@ -189,9 +200,10 @@
         return;
       }
       sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
-      // 進站預設為南屯；若表內沒有南屯，改選第一個
       if (!centers.includes(currentCenter)) currentCenter = centers[0];
       sel.value = currentCenter;
+
+      console.log('rows parsed:', rows.length, 'centers:', centers.length);
     }
 
     function sliceForChart() {
@@ -237,13 +249,17 @@
             }}
           },
           scales: {
-            x: { type:'time',
+            x: {
+              type:'time',
               time:{ tooltipFormat:'MM/dd HH:mm', displayFormats:{ minute:'HH:mm', hour:'MM/dd HH:mm' } },
               adapters:{ date:{ zone:'Asia/Taipei' } },
-              ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' } },
-            y: { beginAtZero:true,
+              ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' }
+            },
+            y: {
+              beginAtZero:true,
               ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' },
-              title:{ display:true, text:'人數', color:'#e5e7eb' } }
+              title:{ display:true, text:'人數', color:'#e5e7eb' }
+            }
           }
         }
       });
@@ -278,7 +294,7 @@
       try {
         await fetchCSV();
         applyAndRender();
-        document.getElementById('csvLink').href = csvUrl();
+        document.getElementById('csvLink').href = csvUrl(); // 更新附帶 _ts 的 CSV 連結
       } catch (e) {
         console.error(e);
       }
@@ -295,8 +311,8 @@
       currentCenter = e.target.value; applyAndRender();
     });
 
-    // 初始化：先把「南屯運動中心」設為預設中心
-    currentCenter = DEFAULT_CENTER;
+    // 初始化
+    currentCenter = DEFAULT_CENTER; // 進站先鎖定南屯
     initChart();
     refresh();
     setInterval(refresh, REFRESH_MS);
