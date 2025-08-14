@@ -133,7 +133,7 @@
     // - 只做水平裁切 + 淡入，不改變線條位置，效能穩
     const VineRevealPlugin = {
       id: 'vineReveal',
-      duration: 1800, // ms
+      duration: 2500, // ms
       afterInit(chart, args, opts) {
         this.restart(chart); // 初始即開啟
       },
@@ -144,7 +144,7 @@
         chart.$vineProgress = 0;
         const tick = () => {
           const now = performance.now();
-          const t = Math.min(1, (now - chart.$vineStart) / (this.duration || 1200));
+          const t = Math.min(1, (now - chart.$vineStart) / (this.duration || 2500));
           chart.$vineProgress = t;
           chart.draw();                 // 主動要求重繪
           if (t < 1) chart.$vineRAF = requestAnimationFrame(tick);
