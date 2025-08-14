@@ -4,19 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>南屯運動中心｜即時人數</title>
-  <script>
-    // ★ 版本參數：每次你有更新就改這一行（v1 → v2...）
-    const VERSION = 'v1';
-    // 若網址沒有 ?v= 參數，幫你自動加，避免 GitHub Pages/瀏覽器快取
-    if (!location.search.includes('v=')) {
-      const sep = location.search ? '&' : '?';
-      location.replace(location.pathname + location.search + sep + 'v=' + VERSION + location.hash);
-    }
-  </script>
   <!-- Chart.js + Luxon（時間軸） -->
-  <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js?v=v1"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js?v=v1"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1?v=v1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
   <style>
     :root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; }
     html,body { height:100%; margin:0; background:var(--bg); color:var(--fg);
@@ -40,34 +31,39 @@
   <div class="wrap">
     <div class="card">
       <h1>南屯運動中心｜即時人數</h1>
-      <p class="sub">來源：Google Sheet（CSV 發佈）→ Chart.js（定時更新） · 版號：<code id="ver"></code></p>
+      <p class="sub">來源：Google Sheet（CSV 發佈）→ Chart.js（定時更新）</p>
       <div class="row">
         <span class="pill">泳池 <b id="poolNow">—</b> 人</span>
         <span class="pill">健身房 <b id="gymNow">—</b> 人</span>
         <span class="pill">最後更新：<span id="lastUpd">—</span></span>
       </div>
-
-      <div class="chart-wrap">
-        <canvas id="chart"></canvas>
-      </div>
-
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
       <div class="footer">
-        每 <span id="freqText">600</span> 秒自動更新 ·
-        <a id="csvLink" target="_blank" rel="noopener">查看 CSV</a>
+        每 <span id="freqText">600</span> 秒自動更新 · <a id="csvLink" target="_blank" rel="noopener">查看 CSV</a>
       </div>
     </div>
   </div>
 
   <script>
-    document.getElementById('ver').textContent = VERSION;
-
-    // ======== 你的設定（已放入 CSV 連結） ========
+    // === 換成你的 CSV 連結 ===
     const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
-    const REFRESH_MS = 600_000; // 10 分鐘；要 1 分鐘就改 60_000
-    // ==============================================
-
+    const REFRESH_MS = 600_000; // 10 分鐘
     document.getElementById('csvLink').href = CSV_URL;
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
+
+    // 解析「2025/8/14 上午 9:01:16」→ 毫秒時間戳（台北時區）
+    function parseTWDateMs(tStr) {
+      const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
+      let dt =
+        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);
+      if (!dt.isValid) dt =
+        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);
+      if (!dt.isValid) dt =
+        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);
+      if (!dt.isValid) dt =
+        luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });
+      return dt.isValid ? dt.toMillis() : NaN;
+    }
 
     async function fetchCSV() {
       const url = CSV_URL + (CSV_URL.includes('?') ? '&' : '?') + '_ts=' + Date.now(); // 防快取
@@ -76,7 +72,7 @@
       const text = await res.text();
 
       const lines = text.trim().split(/\r?\n/);
-      if (lines.length <= 1) return { labels: [], pool: [], gym: [] };
+      if (lines.length <= 1) return { times: [], pool: [], gym: [] };
 
       const header = lines[0].split(',').map(s => s.trim());
       const idxTime = header.findIndex(h => /時間|timestamp/i.test(h));
@@ -84,30 +80,18 @@
       const idxGym  = header.findIndex(h => /健身|gym/i.test(h));
       if (idxTime < 0 || idxPool < 0 || idxGym < 0) throw new Error('欄位無法識別：' + header.join(','));
 
-      const labels = [], pool = [], gym = [];
+      const times = [], pool = [], gym = [];
       for (let i = 1; i < lines.length; i++) {
-        const row = lines[i]; if (!row.trim()) continue;
+        const row = lines[i];
+        if (!row.trim()) continue;
         const cols = row.split(',');
-        const tStr = (cols[idxTime] || '').trim();
-        const pStr = (cols[idxPool] || '').trim();
-        const gStr = (cols[idxGym]  || '').trim();
-        const t = Date.parse(tStr.replace(' ', 'T'));
-        if (isNaN(t)) continue;
-        labels.push(new Date(t));
-        pool.push(Number(pStr) || 0);
-        gym.push(Number(gStr) || 0);
+        const tMs = parseTWDateMs((cols[idxTime] || '').trim());
+        if (Number.isNaN(tMs)) continue; // 時間不合法就跳過
+        times.push(tMs);
+        pool.push(Number((cols[idxPool] || '').trim()) || 0);
+        gym.push(Number((cols[idxGym]  || '').trim()) || 0);
       }
-
-      // // （可選）只顯示最近 24 小時：取消以下註解即可
-      // const cutoff = Date.now() - 24*60*60*1000;
-      // const tmp = [];
-      // for (let i=0; i<labels.length; i++) {
-      //   const ms = labels[i].getTime();
-      //   if (ms >= cutoff) tmp.push({t:ms, p:pool[i], g:gym[i]});
-      // }
-      // return { labels: tmp.map(x=>new Date(x.t)), pool: tmp.map(x=>x.p), gym: tmp.map(x=>x.g) };
-
-      return { labels, pool, gym };
+      return { times, pool, gym };
     }
 
     // 只建立一次 Chart
@@ -154,25 +138,24 @@
 
     async function refresh() {
       try {
-        const { labels, pool, gym } = await fetchCSV();
+        const { times, pool, gym } = await fetchCSV();
         const c = initChart();
-        c.data.labels = labels.map(d => d.getTime());
+        c.data.labels = times;           // 直接塞毫秒
         c.data.datasets[0].data = pool;
         c.data.datasets[1].data = gym;
         c.update('none');
 
-        if (labels.length) {
+        if (times.length) {
           document.getElementById('poolNow').textContent = pool[pool.length-1];
           document.getElementById('gymNow').textContent  = gym[gym.length-1];
-          const dt = labels[labels.length-1];
           document.getElementById('lastUpd').textContent =
-            luxon.DateTime.fromJSDate(dt).setZone('Asia/Taipei').toFormat('MM/dd HH:mm:ss');
+            luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('MM/dd HH:mm:ss');
         }
       } catch (e) { console.error(e); }
     }
 
-    refresh();
-    setInterval(refresh, REFRESH_MS);
+    refresh();                    // 先載入一次
+    setInterval(refresh, REFRESH_MS); // 定時更新
   </script>
 </body>
 </html>
