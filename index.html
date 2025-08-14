@@ -46,7 +46,7 @@
       <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新） · 固定只顯示 06:00–22:00</p>
 
       <div class="row">
-        <span class="pill">泳池 <b id="poolNow">—</b> 人</span>
+        <span class="pill">游泳池 <b id="poolNow">—</b> 人</span>
         <span class="pill">健身房 <b id="gymNow">—</b> 人</span>
         <span class="pill">最後更新：<span id="lastUpd">—</span></span>
       </div>
@@ -119,7 +119,7 @@
     }
     const RX_TIME   = /(時間|timestamp)/i;
     const RX_CENTER = /(中心|運動中心|館|場館|館別|中心名稱|center)/i;
-    const RX_POOL   = /(泳池|pool|swim)/i;
+    const RX_POOL   = /(游泳池|pool|swim)/i;
     const RX_GYM    = /(健身|健身房|gym|weight)/i;
 
     /** @type {{t:number, center:string, pool:number, gym:number, isoDate:string}[]} */
@@ -229,7 +229,7 @@
       chart = new Chart(ctx, {
         type: 'line',
         data: { labels: [], datasets: [
-          { label: '泳池人數', data: [], borderWidth: 2, tension: 0.25, pointRadius: 0 },
+          { label: '游泳池人數', data: [], borderWidth: 2, tension: 0.25, pointRadius: 0 },
           { label: '健身房人數', data: [], borderWidth: 2, tension: 0.25, pointRadius: 0 },
         ]},
         options: {
