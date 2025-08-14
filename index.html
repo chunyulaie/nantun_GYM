@@ -109,18 +109,35 @@
     // 解析台北時區時間
     function parseTWDateMs(tStr) {
       const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
-      let dt =
-        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);
-      if (!dt.isValid) dt =
-        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);
-      if (!dt.isValid) dt =
-        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);
-      if (!dt.isValid) dt =
-        luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);
-      if (!dt.isValid) dt =
-        luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });
-      return dt.isValid ? dt.toMillis() : NaN;
+      let dt;
+    
+      // 1) 你現在的格式：yyyy-MM-dd HH:mm:ss
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm:ss', opts);
+      if (dt.isValid) return dt.toMillis();
+    
+      // 2) 沒秒數：yyyy-MM-dd HH:mm
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm', opts);
+      if (dt.isValid) return dt.toMillis();
+    
+      // 3) 斜線格式
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);
+      if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);
+      if (dt.isValid) return dt.toMillis();
+    
+      // 4) 含上/下午
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);
+      if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);
+      if (dt.isValid) return dt.toMillis();
+    
+      // 5) ISO 類型（帶 T）
+      dt = luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });
+      if (dt.isValid) return dt.toMillis();
+    
+      return NaN;
     }
+
 
     // 欄位對應（容錯多種命名）
     function pick(obj, keysRegex) {
