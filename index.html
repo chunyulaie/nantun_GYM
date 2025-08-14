@@ -127,6 +127,71 @@
     let currentCenter = DEFAULT_CENTER;  // 預設南屯
     let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
 
+    // ====== 自訂插件：藤蔓生成 + 線條跳動 + 流動虛線 ======
+    const VineAndWigglePlugin = {
+      id: 'vineWiggle',
+      startTime: 0,
+      revealMs: 1400,             // 藤蔓生成動畫長度
+      afterInit(chart) {
+        this.startTime = performance.now();
+        chart.canvas.addEventListener('mouseenter', ()=> chart._hovering = true);
+        chart.canvas.addEventListener('mouseleave', ()=> chart._hovering = false);
+      },
+      beforeDatasetsDraw(chart, args, pluginOptions) {
+        const {ctx, chartArea, scales} = chart;
+        const now = performance.now();
+        const t = Math.min(1, (now - this.startTime) / this.revealMs);
+        // easeOutCubic
+        const ease = 1 - Math.pow(1 - t, 3);
+
+        // 1) 藤蔓生成：用裁切區域由左到右展開
+        ctx.save();
+        const w = chartArea.right - chartArea.left;
+        const h = chartArea.bottom - chartArea.top;
+        ctx.beginPath();
+        ctx.rect(chartArea.left, chartArea.top, w * ease, h);
+        ctx.clip();
+
+        // 2) 線條跳動/發光：在 datasets 繪製前，設置全域陰影（呼吸感）
+        const hovering = !!chart._hovering;
+        const amp = hovering ? 8 : 3;                 // 陰影強度
+        const pulse = 0.5 + 0.5 * Math.sin(now / 400);
+        ctx.shadowColor = `rgba(96,165,250,${0.25 * pulse})`;
+        ctx.shadowBlur = amp * pulse;
+      },
+      beforeDatasetDraw(chart, args, pluginOptions) {
+        // 3) 整條線微幅上下位移（跳動感）；滑鼠 hover 時加大
+        const now = performance.now();
+        const hovering = !!chart._hovering;
+        const ampPx = hovering ? 1.2 : 0.5;          // 位移幅度（像素）
+        const offset = Math.sin((now / 500) + args.index) * ampPx;
+
+        const {ctx} = chart;
+        ctx.save();
+        ctx.translate(0, offset);
+
+        // 4) 滑鼠 hover 時啟動流動虛線
+        if (hovering) {
+          // 僅讓「健身房」那條變成流動虛線，有辨識度（index 1）
+          if (args.index === 1) {
+            const dash = [6, 6];
+            ctx.setLineDash(dash);
+            ctx.lineDashOffset = - (now / 40) % 12;
+          }
+          // 也可以讓兩條都流動：把上面 if 拿掉即可
+        }
+      },
+      afterDatasetDraw(chart, args, pluginOptions) {
+        const {ctx} = chart;
+        ctx.restore();  // 還原 translate / dash 設定
+      },
+      afterDatasetsDraw(chart) {
+        const {ctx} = chart;
+        ctx.restore(); // 結束 clip + 陰影
+      }
+    };
+    Chart.register(VineAndWigglePlugin);
+
     async function fetchCSV() {
       const res = await fetch(csvUrl(), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -292,6 +357,11 @@
       c.data.labels = times;
       c.data.datasets[0].data = pool;
       c.data.datasets[1].data = gym;
+
+      // 重新啟動「藤蔓生成」動畫（切換中心/日期時）
+      const plugin = Chart.registry.getPlugin('vineWiggle');
+      if (plugin) plugin.startTime = performance.now();
+
       c.update('none');
 
       if (times.length) {
