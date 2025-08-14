@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>南屯運動中心｜即時人數（多中心）</title>
+  <title>台中市各運動中心｜每日人數</title>
 
   <!-- Luxon + Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
@@ -24,8 +24,8 @@
     .sub { color:var(--muted); margin:0 0 12px; font-size:14px; }
     .row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; align-items:center; }
     .pill { padding:8px 12px; border-radius:999px; background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,白,.1); font-size:14px; }
-    .filters { display:flex; gap:8px; flex-wrap:wrap; }
+      border:1px solid rgba(255,255,255,.1); font-size:14px; }
+    .filters { display:flex; gap:12px; flex-wrap:wrap; }
     .btn {
       padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
       background:rgba(255,255,255,.06); color:var(--fg); cursor:pointer; font-size:14px;
@@ -54,14 +54,14 @@
       background-color:#fff;  /* 展開列表白底 */
       color:#000;             /* 黑字 */
     }
-    /* 若想展開也維持暗色，改成：#1f2937 與 #f9fafb */
-    /* .select option{ background:#1f2937; color:#f9fafb; } */
+    /* 如果想展開也維持暗色，可改成：
+       .select option { background:#1f2937; color:#f9fafb; } */
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>南屯運動中心｜即時人數（多中心）</h1>
+      <h1 id="pageTitle">南屯運動中心｜每日人數</h1>
       <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新）</p>
 
       <div class="row">
@@ -117,35 +117,17 @@
     document.getElementById('csvLink').href = csvUrl();
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
 
-    // 解析台北時區時間（支援你的 yyyy-MM-dd HH:mm:ss）
+    // 解析台北時區時間（支援 yyyy-MM-dd HH:mm:ss 等）
     function parseTWDateMs(tStr) {
       const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
       let dt;
-
-      // 1) 目前你 CSV 的主要格式
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm:ss', opts);
-      if (dt.isValid) return dt.toMillis();
-
-      // 2) 沒秒數
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm', opts);
-      if (dt.isValid) return dt.toMillis();
-
-      // 3) 斜線格式
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);
-      if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);
-      if (dt.isValid) return dt.toMillis();
-
-      // 4) 含上/下午
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);
-      if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);
-      if (dt.isValid) return dt.toMillis();
-
-      // 5) ISO
-      dt = luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });
-      if (dt.isValid) return dt.toMillis();
-
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm:ss', opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm', opts);    if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);   if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);      if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);  if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);     if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });        if (dt.isValid) return dt.toMillis();
       return NaN;
     }
 
@@ -197,13 +179,14 @@
       const sel = document.getElementById('centerSel');
       if (centers.length === 0) {
         sel.innerHTML = `<option value="" disabled selected>（找不到資料）</option>`;
+        updateHeading(); // 沒資料也更新一次標題
         return;
       }
       sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
       if (!centers.includes(currentCenter)) currentCenter = centers[0];
       sel.value = currentCenter;
 
-      console.log('rows parsed:', rows.length, 'centers:', centers.length);
+      updateHeading();
     }
 
     function sliceForChart() {
@@ -225,6 +208,16 @@
         pool:  filtered.map(r=>r.pool),
         gym:   filtered.map(r=>r.gym),
       };
+    }
+
+    // 更新頁面主標題（依選擇的中心）
+    function updateHeading() {
+      const h1 = document.getElementById('pageTitle');
+      if (currentCenter) {
+        h1.textContent = `${currentCenter}｜每日人數`;
+      } else {
+        h1.textContent = `台中市各運動中心｜每日人數`;
+      }
     }
 
     let chart;
@@ -308,11 +301,14 @@
       onlyDaytime = !!e.target.checked; applyAndRender();
     });
     document.getElementById('centerSel').addEventListener('change', (e)=>{
-      currentCenter = e.target.value; applyAndRender();
+      currentCenter = e.target.value;
+      updateHeading();
+      applyAndRender();
     });
 
     // 初始化
     currentCenter = DEFAULT_CENTER; // 進站先鎖定南屯
+    updateHeading();
     initChart();
     refresh();
     setInterval(refresh, REFRESH_MS);
