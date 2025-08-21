@@ -262,6 +262,7 @@
         if (r.center !== currentCenter || r.isoDate !== currentIsoDate) return false;
         const hour = luxon.DateTime.fromMillis(r.t).setZone('Asia/Taipei').hour;
         if (hour >= 7 && hour <= 22 && r.pool === 0 && r.gym === 0) return false;
+        if (r.center === '港區運動中心' && r.gym === 100) return false; // 👈 過濾掉異常值
         return true;
       });
 
