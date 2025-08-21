@@ -335,23 +335,34 @@
           scales: {
             x: {
               type: 'time',
+              adapters: { date: { zone: 'Asia/Taipei' } },
               time: {
                 unit: 'hour',
-                displayFormats: {
-                  hour: 'HH:mm'   // 只顯示時間
-                },
-                tooltipFormat: 'HH:mm' // 提示框也只顯示時間
+                stepSize: 1,
+                displayFormats: { hour: 'HH:mm', minute: 'HH:mm' }, // 只顯示時間
+                tooltipFormat: 'HH:mm'
               },
               ticks: {
+                color: '#e5e7eb',
                 autoSkip: true,
-                maxRotation: 0,   // 避免文字旋轉
-                minRotation: 0
-              }
+                maxRotation: 0,
+                minRotation: 0,
+                maxTicksLimit: 10,
+                // 保險：強制回 HH:mm
+                callback: (val) => luxon.DateTime.fromMillis(val).setZone('Asia/Taipei').toFormat('HH:mm')
+              },
+              grid: { color: 'rgba(255,255,255,.08)' },     // ← 深色背景可見的格線
+              border: { color: 'rgba(255,255,255,.15)' }    // 軸線顏色
             },
             y: {
-              beginAtZero: true
+              beginAtZero: true,
+              ticks: { color: '#e5e7eb' },
+              grid: { color: 'rgba(255,255,255,.08)' },     // ← 保留 Y 軸輔助線
+              title: { display: true, text: '人數', color: '#e5e7eb' },
+              border: { color: 'rgba(255,255,255,.15)' }
             }
           }
+
         }
       });
       return chart;
