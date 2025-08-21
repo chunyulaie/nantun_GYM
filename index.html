@@ -334,15 +334,22 @@
           },
           scales: {
             x: {
-              type:'time',
-              time:{ tooltipFormat:'MM/dd HH:mm', displayFormats:{ minute:'HH:mm', hour:'MM/dd HH:mm' } },
-              adapters:{ date:{ zone:'Asia/Taipei' } },
-              ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' }
+              type: 'time',
+              time: {
+                unit: 'hour',
+                displayFormats: {
+                  hour: 'HH:mm'   // 只顯示時間
+                },
+                tooltipFormat: 'HH:mm' // 提示框也只顯示時間
+              },
+              ticks: {
+                autoSkip: true,
+                maxRotation: 0,   // 避免文字旋轉
+                minRotation: 0
+              }
             },
             y: {
-              beginAtZero:true,
-              ticks:{ color:'#e5e7eb' }, grid:{ color:'rgba(255,255,255,.08)' },
-              title:{ display:true, text:'人數', color:'#e5e7eb' }
+              beginAtZero: true
             }
           }
         }
