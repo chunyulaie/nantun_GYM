@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>台中市各運動中心｜每日人數</title>
+  <title>台中市各運動中心｜人流</title>
 
   <!-- Luxon + Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
@@ -42,7 +42,7 @@
 <body>
   <div class="wrap">
     <div class="card">
-      <h1 id="pageTitle">南屯運動中心｜每日人數</h1>
+      <h1 id="pageTitle">南屯運動中心｜人流</h1>
       <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新） · 固定只顯示 06:00–22:00</p>
 
       <div class="row">
@@ -262,57 +262,6 @@
         gym:   filtered.map(r=>r.gym),
       };
     }
-// ===== 顯示用穩定器（只在前端修飾，不改原始資料）=====
-function toNullIfIsolatedZero(arr) {
-  const out = arr.slice();
-  for (let i = 1; i < arr.length - 1; i++) {
-    if (out[i] === 0 && out[i-1] > 0 && out[i+1] > 0) out[i] = null;
-  }
-  return out;
-}
-
-function clampDownside(values, { maxDropPct = 0.5, maxDropAbs = 40 } = {}) {
-  const out = [];
-  for (let i = 0; i < values.length; i++) {
-    const v = values[i];
-    const prev = i > 0 ? out[i-1] : null;
-    if (v == null || prev == null) { out.push(v); continue; }
-    const diff = v - prev;
-    if (diff >= 0) { out.push(v); continue; }
-    const limit = -Math.max(maxDropAbs, prev * maxDropPct);
-    out.push(Math.max(prev + limit, v));
-  }
-  return out;
-}
-
-function emaDirectional(values, { alphaUp = 0.7, alphaDown = 0.25 } = {}) {
-  let s = null;
-  const out = [];
-  for (const v of values) {
-    if (v == null) { out.push(null); continue; }
-    if (s == null) { s = v; out.push(s); continue; }
-    const alpha = v < s ? alphaDown : alphaUp;
-    s = alpha * v + (1 - alpha) * s;
-    out.push(s);
-  }
-  return out.map(x => (x == null ? null : Math.round(x)));
-}
-
-function stabilizeSeries(times, values, opts = {}) {
-  const MAX_INTERP_GAP_MIN = opts.maxInterpGapMin ?? 30;
-  let v = toNullIfIsolatedZero(values);
-  v = clampDownside(v, { maxDropPct: opts.maxDropPct ?? 0.5, maxDropAbs: opts.maxDropAbs ?? 40 });
-  v = emaDirectional(v, { alphaUp: opts.alphaUp ?? 0.7, alphaDown: opts.alphaDown ?? 0.25 });
-  const out = v.slice();
-  for (let i = 1; i < times.length; i++) {
-    const dtMin = (times[i] - times[i-1]) / 60000;
-    if (dtMin > MAX_INTERP_GAP_MIN) {
-      out[i] = null;
-    }
-  }
-  return out;
-}
-
 
     // 更新頁面主標題
     function updateHeading() {
@@ -388,27 +337,12 @@ function stabilizeSeries(times, values, opts = {}) {
       return chart;
     }
 
+    function applyAndRender() {
+      const c = initChart();
       const { times, pool, gym } = sliceForChart();
-      
-      const poolDisp = stabilizeSeries(times, pool, {
-        maxDropPct: 0.5,
-        maxDropAbs: 40,
-        alphaUp: 0.7,
-        alphaDown: 0.25,
-        maxInterpGapMin: 30
-      });
-      const gymDisp = stabilizeSeries(times, gym, {
-        maxDropPct: 0.5,
-        maxDropAbs: 40,
-        alphaUp: 0.7,
-        alphaDown: 0.25,
-        maxInterpGapMin: 30
-      });
-      
       c.data.labels = times;
-      c.data.datasets[0].data = poolDisp;
-      c.data.datasets[1].data = gymDisp;
-    
+      c.data.datasets[0].data = pool;
+      c.data.datasets[1].data = gym;
 
       // 重新啟動「藤蔓生成」動畫（每次換中心/日期或重新抓資料時）
       const plugin = Chart.registry.getPlugin('vineReveal');
