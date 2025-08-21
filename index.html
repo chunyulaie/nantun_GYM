@@ -36,7 +36,16 @@
       background:rgba(255,255,255,.06); color:var(--fg);
       appearance:auto;
     }
-    .select option { background:#fff; color:#000; } /* 展開列表白底黑字，避免看不到 */
+    .select option { background:#fff; color:#000; }
+
+    /* 新增：按鈕樣式 */ /* <-- 新增 */
+    .btn {
+      padding:6px 10px; border-radius:10px; font-size:14px; cursor:pointer;
+      background:rgba(255,255,255,.06); color:var(--fg); border:1px solid rgba(255,255,255,.15);
+    }
+    .btn:hover { background:rgba(255,255,255,.1); }
+    .btn.active { background:rgba(96,165,250,.18); border-color:#60a5fa; }
+    .btn-sm { padding:6px 10px; }
   </style>
 </head>
 <body>
@@ -66,6 +75,13 @@
             </select>
           </div>
         </div>
+
+        <!-- 新增：系列顯示切換按鈕 --> <!-- <-- 新增 -->
+        <div class="btn-group" id="seriesBtns" style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-sm active" data-mode="both">全部</button>
+          <button class="btn btn-sm" data-mode="pool">只看游泳池</button>
+          <button class="btn btn-sm" data-mode="gym">只看健身房</button>
+        </div>
       </div>
 
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
@@ -79,8 +95,8 @@
 
   <script>
     // === 設定 ===
-    const DEFAULT_CENTER = '南屯運動中心';        // 預設顯示
-    const SHEET_GID_ALL_CENTERS = '840629068';    // all_centers 的 gid
+    const DEFAULT_CENTER = '南屯運動中心';
+    const SHEET_GID_ALL_CENTERS = '840629068';
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
     const REFRESH_MS = 600_000; // 10 分鐘
     const DAY_START = 6;  // 06:00
@@ -89,13 +105,12 @@
     function csvUrl() {
       const u = new URL(CSV_BASE);
       u.searchParams.set('gid', SHEET_GID_ALL_CENTERS);
-      u.searchParams.set('_ts', Date.now()); // 防快取
+      u.searchParams.set('_ts', Date.now());
       return u.toString();
     }
     document.getElementById('csvLink').href = csvUrl();
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
 
-    // 解析台北時區時間（支援 yyyy-MM-dd HH:mm:ss 等）
     function parseTWDateMs(tStr) {
       const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
       let dt;
@@ -109,7 +124,6 @@
       return NaN;
     }
 
-    // 欄位對應（容錯多種命名 + 去掉 BOM）
     function pick(obj, keysRegex) {
       for (const k of Object.keys(obj)) {
         const nk = k.replace(/\ufeff/g,'').trim();
@@ -122,23 +136,17 @@
     const RX_POOL   = /(游泳池|pool|swim)/i;
     const RX_GYM    = /(健身|健身房|gym|weight)/i;
 
-    /** @type {{t:number, center:string, pool:number, gym:number, isoDate:string}[]} */
     let rows = [];
-    let currentCenter = DEFAULT_CENTER;  // 預設南屯
-    let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
+    let currentCenter = DEFAULT_CENTER;
+    let currentIsoDate = '';
+    let viewMode = 'both'; // 新增：'both' | 'pool' | 'gym'  // <-- 新增
 
-    // ====== 穩定版「藤蔓生成」插件（無跳動）======
-    // 特色：
-    // - 使用 requestAnimationFrame 主動重繪直到完成，避免卡住
-    // - 只做水平裁切 + 淡入，不改變線條位置，效能穩
+    // ====== 藤蔓生成插件 ======
     const VineRevealPlugin = {
       id: 'vineReveal',
-      duration: 2500, // ms
-      afterInit(chart, args, opts) {
-        this.restart(chart); // 初始即開啟
-      },
+      duration: 2500,
+      afterInit(chart) { this.restart(chart); },
       restart(chart) {
-        // 取消前一輪 RAF
         if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF);
         chart.$vineStart = performance.now();
         chart.$vineProgress = 0;
@@ -146,37 +154,28 @@
           const now = performance.now();
           const t = Math.min(1, (now - chart.$vineStart) / (this.duration || 2500));
           chart.$vineProgress = t;
-          chart.draw();                 // 主動要求重繪
+          chart.draw();
           if (t < 1) chart.$vineRAF = requestAnimationFrame(tick);
         };
         chart.$vineRAF = requestAnimationFrame(tick);
       },
       beforeDatasetsDraw(chart) {
         const t = chart.$vineProgress ?? 1;
-        if (t >= 1) return; // 完成就不裁切
+        if (t >= 1) return;
         const {ctx, chartArea} = chart;
-        const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
+        const ease = 1 - Math.pow(1 - t, 3);
         const w = chartArea.right - chartArea.left;
         const h = chartArea.bottom - chartArea.top;
-
-        ctx.save();
-        ctx.beginPath();
+        ctx.save(); ctx.beginPath();
         ctx.rect(chartArea.left, chartArea.top, w * ease, h);
         ctx.clip();
-
-        // 線條與填色淡入（不影響 tooltip）
         ctx.globalAlpha = 0.4 + 0.6 * ease;
         chart.$vineClipped = true;
       },
       afterDatasetsDraw(chart) {
-        if (chart.$vineClipped) {
-          chart.ctx.restore();
-          chart.$vineClipped = false;
-        }
+        if (chart.$vineClipped) { chart.ctx.restore(); chart.$vineClipped = false; }
       },
-      destroy(chart) {
-        if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF);
-      }
+      destroy(chart) { if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF); }
     };
     Chart.register(VineRevealPlugin);
 
@@ -197,11 +196,10 @@
         const t = parseTWDateMs(tStr);
         if (!center || Number.isNaN(t)) continue;
 
-        // 以台北時區取「日期字串」
         const dt = luxon.DateTime.fromMillis(t).setZone('Asia/Taipei');
         const h  = dt.hour;
-        if (h < DAY_START || h > DAY_END) continue;  // 固定只看 06–22
-        const isoDate = dt.toISODate(); // yyyy-MM-dd
+        if (h < DAY_START || h > DAY_END) continue;
+        const isoDate = dt.toISODate();
 
         tmp.push({ t, center, pool, gym, isoDate });
       }
@@ -228,9 +226,8 @@
     }
 
     function rebuildDateSelect() {
-      // 僅取當前中心的可用日期列表
       const dates = Array.from(new Set(rows.filter(r=>r.center===currentCenter).map(r=>r.isoDate)))
-        .sort((a,b)=> b.localeCompare(a)); // 由新到舊
+        .sort((a,b)=> b.localeCompare(a));
       const sel = document.getElementById('dateSel');
       if (dates.length === 0) {
         sel.innerHTML = `<option value="" disabled selected>（此中心無資料）</option>`;
@@ -238,7 +235,7 @@
         return;
       }
       sel.innerHTML = dates.map(d=>`<option value="${d}">${d}</option>`).join('');
-      if (!dates.includes(currentIsoDate)) currentIsoDate = dates[0]; // 預設最新一天
+      if (!dates.includes(currentIsoDate)) currentIsoDate = dates[0];
       sel.value = currentIsoDate;
     }
 
@@ -253,21 +250,13 @@
       }
     }
 
-    // 依中心 + 日期切片
     function sliceForChart() {
       const filtered = rows.filter(r => {
         if (r.center !== currentCenter || r.isoDate !== currentIsoDate) return false;
-    
-        // 取得台北時區小時
         const hour = luxon.DateTime.fromMillis(r.t).setZone('Asia/Taipei').hour;
-    
-        // 如果時間在 07:00~22:00，且 pool/gym 都是 0 → 跳過
-        if (hour >= 7 && hour <= 22 && r.pool === 0 && r.gym === 0) {
-          return false;
-        }
+        if (hour >= 7 && hour <= 22 && r.pool === 0 && r.gym === 0) return false;
         return true;
       });
-    
       return {
         times: filtered.map(r=>r.t),
         pool:  filtered.map(r=>r.pool),
@@ -275,15 +264,9 @@
       };
     }
 
-
-    // 更新頁面主標題
     function updateHeading() {
       const h1 = document.getElementById('pageTitle');
-      if (currentCenter) {
-        h1.textContent = `${currentCenter}｜人流`;
-      } else {
-        h1.textContent = `台中市各運動中心｜人流`;
-      }
+      h1.textContent = currentCenter ? `${currentCenter}｜人流` : `台中市各運動中心｜人流`;
     }
 
     let chart;
@@ -302,7 +285,7 @@
             pointHoverRadius: 6,
             borderCapStyle: 'round',
             borderJoinStyle: 'round',
-            borderColor: 'rgba(99,102,241,1)',      // indigo
+            borderColor: 'rgba(99,102,241,1)',
             backgroundColor: 'rgba(99,102,241,0.15)',
             fill: 'origin'
           },
@@ -315,7 +298,7 @@
             pointHoverRadius: 6,
             borderCapStyle: 'round',
             borderJoinStyle: 'round',
-            borderColor: 'rgba(16,185,129,1)',      // emerald
+            borderColor: 'rgba(16,185,129,1)',
             backgroundColor: 'rgba(16,185,129,0.15)',
             fill: 'origin'
           }
@@ -323,7 +306,7 @@
         options: {
           responsive: true, maintainAspectRatio: false,
           interaction: { mode:'nearest', intersect:false },
-          animation: { duration: 700, easing: 'easeOutQuart' }, // Chart.js 自己的補間
+          animation: { duration: 700, easing: 'easeOutQuart' },
           plugins: {
             legend: { labels: { color:'#e5e7eb' } },
             tooltip: { callbacks: {
@@ -339,7 +322,7 @@
               time: {
                 unit: 'hour',
                 stepSize: 1,
-                displayFormats: { hour: 'HH:mm', minute: 'HH:mm' }, // 只顯示時間
+                displayFormats: { hour: 'HH:mm', minute: 'HH:mm' },
                 tooltipFormat: 'HH:mm'
               },
               ticks: {
@@ -348,24 +331,30 @@
                 maxRotation: 0,
                 minRotation: 0,
                 maxTicksLimit: 10,
-                // 保險：強制回 HH:mm
                 callback: (val) => luxon.DateTime.fromMillis(val).setZone('Asia/Taipei').toFormat('HH:mm')
               },
-              grid: { color: 'rgba(255,255,255,.08)' },     // ← 深色背景可見的格線
-              border: { color: 'rgba(255,255,255,.15)' }    // 軸線顏色
+              grid: { color: 'rgba(255,255,255,.08)' },
+              border: { color: 'rgba(255,255,255,.15)' }
             },
             y: {
               beginAtZero: true,
               ticks: { color: '#e5e7eb' },
-              grid: { color: 'rgba(255,255,255,.08)' },     // ← 保留 Y 軸輔助線
+              grid: { color: 'rgba(255,255,255,.08)' },
               title: { display: true, text: '人數', color: '#e5e7eb' },
               border: { color: 'rgba(255,255,255,.15)' }
             }
           }
-
         }
       });
       return chart;
+    }
+
+    // 新增：根據 viewMode 隱藏/顯示 dataset  // <-- 新增
+    function applyVisibility() {
+      if (!chart) return;
+      chart.data.datasets[0].hidden = (viewMode === 'gym');   // 游泳池
+      chart.data.datasets[1].hidden = (viewMode === 'pool');  // 健身房
+      chart.update('none');
     }
 
     function applyAndRender() {
@@ -375,13 +364,9 @@
       c.data.datasets[0].data = pool;
       c.data.datasets[1].data = gym;
 
-      // 重新啟動「藤蔓生成」動畫（每次換中心/日期或重新抓資料時）
       const plugin = Chart.registry.getPlugin('vineReveal');
-      if (plugin && typeof plugin.restart === 'function') {
-        plugin.restart(c);
-      }
+      if (plugin && typeof plugin.restart === 'function') plugin.restart(c);
 
-      // 用 'none' 讓我們的 RAF 控制重繪，不跟 Chart.js 內建動畫衝突
       c.update('none');
 
       if (times.length) {
@@ -394,13 +379,15 @@
         document.getElementById('gymNow').textContent  = '—';
         document.getElementById('lastUpd').textContent = '—';
       }
+
+      applyVisibility(); // 保持當前顯示模式   // <-- 新增
     }
 
     async function refresh() {
       try {
         await fetchCSV();
         applyAndRender();
-        document.getElementById('csvLink').href = csvUrl(); // 更新附帶 _ts 的 CSV 連結
+        document.getElementById('csvLink').href = csvUrl();
       } catch (e) {
         console.error(e);
       }
@@ -410,7 +397,7 @@
     document.getElementById('centerSel').addEventListener('change', (e)=>{
       currentCenter = e.target.value;
       updateHeading();
-      rebuildDateSelect();   // 依中心重建日期清單
+      rebuildDateSelect();
       applyAndRender();
     });
     document.getElementById('dateSel').addEventListener('change', (e)=>{
@@ -418,8 +405,17 @@
       applyAndRender();
     });
 
+    // 新增：系列切換按鈕事件  // <-- 新增
+    document.getElementById('seriesBtns').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-mode]');
+      if (!btn) return;
+      viewMode = btn.dataset.mode;
+      document.querySelectorAll('#seriesBtns .btn').forEach(b => b.classList.toggle('active', b === btn));
+      applyVisibility();
+    });
+
     // 初始化
-    currentCenter = DEFAULT_CENTER; // 進站先鎖定南屯
+    currentCenter = DEFAULT_CENTER;
     updateHeading();
     initChart();
     refresh();
