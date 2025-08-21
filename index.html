@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>台中市各運動中心｜每日人數</title>
+  <title>台中市各運動中心｜人流</title>
 
   <!-- Luxon + Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
@@ -42,7 +42,7 @@
 <body>
   <div class="wrap">
     <div class="card">
-      <h1 id="pageTitle">南屯運動中心｜每日人數</h1>
+      <h1 id="pageTitle">南屯運動中心｜人流</h1>
       <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新） · 固定只顯示 06:00–22:00</p>
 
       <div class="row">
@@ -128,13 +128,17 @@
     let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
 
     // ====== 穩定版「藤蔓生成」插件（無跳動）======
+    // 特色：
+    // - 使用 requestAnimationFrame 主動重繪直到完成，避免卡住
+    // - 只做水平裁切 + 淡入，不改變線條位置，效能穩
     const VineRevealPlugin = {
       id: 'vineReveal',
       duration: 2500, // ms
       afterInit(chart, args, opts) {
-        this.restart(chart);
+        this.restart(chart); // 初始即開啟
       },
       restart(chart) {
+        // 取消前一輪 RAF
         if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF);
         chart.$vineStart = performance.now();
         chart.$vineProgress = 0;
@@ -142,22 +146,25 @@
           const now = performance.now();
           const t = Math.min(1, (now - chart.$vineStart) / (this.duration || 2500));
           chart.$vineProgress = t;
-          chart.draw();
+          chart.draw();                 // 主動要求重繪
           if (t < 1) chart.$vineRAF = requestAnimationFrame(tick);
         };
         chart.$vineRAF = requestAnimationFrame(tick);
       },
       beforeDatasetsDraw(chart) {
         const t = chart.$vineProgress ?? 1;
-        if (t >= 1) return;
+        if (t >= 1) return; // 完成就不裁切
         const {ctx, chartArea} = chart;
-        const ease = 1 - Math.pow(1 - t, 3);
+        const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
         const w = chartArea.right - chartArea.left;
         const h = chartArea.bottom - chartArea.top;
+
         ctx.save();
         ctx.beginPath();
         ctx.rect(chartArea.left, chartArea.top, w * ease, h);
         ctx.clip();
+
+        // 線條與填色淡入（不影響 tooltip）
         ctx.globalAlpha = 0.4 + 0.6 * ease;
         chart.$vineClipped = true;
       },
@@ -190,6 +197,7 @@
         const t = parseTWDateMs(tStr);
         if (!center || Number.isNaN(t)) continue;
 
+        // 以台北時區取「日期字串」
         const dt = luxon.DateTime.fromMillis(t).setZone('Asia/Taipei');
         const h  = dt.hour;
         if (h < DAY_START || h > DAY_END) continue;  // 固定只看 06–22
@@ -220,6 +228,7 @@
     }
 
     function rebuildDateSelect() {
+      // 僅取當前中心的可用日期列表
       const dates = Array.from(new Set(rows.filter(r=>r.center===currentCenter).map(r=>r.isoDate)))
         .sort((a,b)=> b.localeCompare(a)); // 由新到舊
       const sel = document.getElementById('dateSel');
@@ -229,7 +238,7 @@
         return;
       }
       sel.innerHTML = dates.map(d=>`<option value="${d}">${d}</option>`).join('');
-      if (!dates.includes(currentIsoDate)) currentIsoDate = dates[0];
+      if (!dates.includes(currentIsoDate)) currentIsoDate = dates[0]; // 預設最新一天
       sel.value = currentIsoDate;
     }
 
@@ -246,7 +255,19 @@
 
     // 依中心 + 日期切片
     function sliceForChart() {
-      const filtered = rows.filter(r => r.center === currentCenter && r.isoDate === currentIsoDate);
+      const filtered = rows.filter(r => {
+        if (r.center !== currentCenter || r.isoDate !== currentIsoDate) return false;
+    
+        // 取得台北時區小時
+        const hour = luxon.DateTime.fromMillis(r.t).setZone('Asia/Taipei').hour;
+    
+        // 如果時間在 07:00~22:00，且 pool/gym 都是 0 → 跳過
+        if (hour >= 7 && hour <= 22 && r.pool === 0 && r.gym === 0) {
+          return false;
+        }
+        return true;
+      });
+    
       return {
         times: filtered.map(r=>r.t),
         pool:  filtered.map(r=>r.pool),
@@ -254,55 +275,15 @@
       };
     }
 
-    // ===== 顯示用穩定器（只在前端修飾，不改原始資料）=====
-    function toNullIfIsolatedZero(arr) {
-      const out = arr.slice();
-      for (let i = 1; i < arr.length - 1; i++) {
-        if (out[i] === 0 && out[i-1] > 0 && out[i+1] > 0) out[i] = null;
-      }
-      return out;
-    }
 
-    function clampDownside(values, { maxDropPct = 0.5, maxDropAbs = 40 } = {}) {
-      const out = [];
-      for (let i = 0; i < values.length; i++) {
-        const v = values[i];
-        const prev = i > 0 ? out[i-1] : null;
-        if (v == null || prev == null) { out.push(v); continue; }
-        const diff = v - prev;
-        if (diff >= 0) { out.push(v); continue; }
-        const limit = -Math.max(maxDropAbs, prev * maxDropPct);
-        out.push(Math.max(prev + limit, v));
+    // 更新頁面主標題
+    function updateHeading() {
+      const h1 = document.getElementById('pageTitle');
+      if (currentCenter) {
+        h1.textContent = `${currentCenter}｜人流`;
+      } else {
+        h1.textContent = `台中市各運動中心｜人流`;
       }
-      return out;
-    }
-
-    function emaDirectional(values, { alphaUp = 0.7, alphaDown = 0.25 } = {}) {
-      let s = null;
-      const out = [];
-      for (const v of values) {
-        if (v == null) { out.push(null); continue; }
-        if (s == null) { s = v; out.push(s); continue; }
-        const alpha = v < s ? alphaDown : alphaUp;
-        s = alpha * v + (1 - alpha) * s;
-        out.push(s);
-      }
-      return out.map(x => (x == null ? null : Math.round(x)));
-    }
-
-    function stabilizeSeries(times, values, opts = {}) {
-      const MAX_INTERP_GAP_MIN = opts.maxInterpGapMin ?? 30;
-      let v = toNullIfIsolatedZero(values);
-      v = clampDownside(v, { maxDropPct: opts.maxDropPct ?? 0.5, maxDropAbs: opts.maxDropAbs ?? 40 });
-      v = emaDirectional(v, { alphaUp: opts.alphaUp ?? 0.7, alphaDown: opts.alphaDown ?? 0.25 });
-      const out = v.slice();
-      for (let i = 1; i < times.length; i++) {
-        const dtMin = (times[i] - times[i-1]) / 60000;
-        if (dtMin > MAX_INTERP_GAP_MIN) {
-          out[i] = null; // 讓缺口斷線，避免跨太大洞
-        }
-      }
-      return out;
     }
 
     let chart;
@@ -321,10 +302,9 @@
             pointHoverRadius: 6,
             borderCapStyle: 'round',
             borderJoinStyle: 'round',
-            borderColor: 'rgba(99,102,241,1)',
+            borderColor: 'rgba(99,102,241,1)',      // indigo
             backgroundColor: 'rgba(99,102,241,0.15)',
-            fill: 'origin',
-            spanGaps: true
+            fill: 'origin'
           },
           {
             label: '健身房人數',
@@ -335,16 +315,15 @@
             pointHoverRadius: 6,
             borderCapStyle: 'round',
             borderJoinStyle: 'round',
-            borderColor: 'rgba(16,185,129,1)',
+            borderColor: 'rgba(16,185,129,1)',      // emerald
             backgroundColor: 'rgba(16,185,129,0.15)',
-            fill: 'origin',
-            spanGaps: true
+            fill: 'origin'
           }
         ]},
         options: {
           responsive: true, maintainAspectRatio: false,
           interaction: { mode:'nearest', intersect:false },
-          animation: { duration: 700, easing: 'easeOutQuart' },
+          animation: { duration: 700, easing: 'easeOutQuart' }, // Chart.js 自己的補間
           plugins: {
             legend: { labels: { color:'#e5e7eb' } },
             tooltip: { callbacks: {
@@ -374,39 +353,22 @@
     function applyAndRender() {
       const c = initChart();
       const { times, pool, gym } = sliceForChart();
-
-      // 顯示用穩定化
-      const poolDisp = stabilizeSeries(times, pool, {
-        maxDropPct: 0.5,
-        maxDropAbs: 40,
-        alphaUp: 0.7,
-        alphaDown: 0.25,
-        maxInterpGapMin: 30
-      });
-      const gymDisp = stabilizeSeries(times, gym, {
-        maxDropPct: 0.5,
-        maxDropAbs: 40,
-        alphaUp: 0.7,
-        alphaDown: 0.25,
-        maxInterpGapMin: 30
-      });
-
       c.data.labels = times;
-      c.data.datasets[0].data = poolDisp;
-      c.data.datasets[1].data = gymDisp;
+      c.data.datasets[0].data = pool;
+      c.data.datasets[1].data = gym;
 
-      // 重新啟動「藤蔓生成」動畫
-      if (VineRevealPlugin && typeof VineRevealPlugin.restart === 'function') {
-        VineRevealPlugin.restart(c);
+      // 重新啟動「藤蔓生成」動畫（每次換中心/日期或重新抓資料時）
+      const plugin = Chart.registry.getPlugin('vineReveal');
+      if (plugin && typeof plugin.restart === 'function') {
+        plugin.restart(c);
       }
 
-      // 用 'none' 讓我們的 RAF 控制重繪
+      // 用 'none' 讓我們的 RAF 控制重繪，不跟 Chart.js 內建動畫衝突
       c.update('none');
 
       if (times.length) {
-        // 右下角數字：顯示原始值（你也可以改顯示平滑後值）
-        document.getElementById('poolNow').textContent = pool[pool.length-1] ?? '—';
-        document.getElementById('gymNow').textContent  = gym[gym.length-1]  ?? '—';
+        document.getElementById('poolNow').textContent = pool[pool.length-1];
+        document.getElementById('gymNow').textContent  = gym[gym.length-1];
         document.getElementById('lastUpd').textContent =
           luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
       } else {
@@ -420,16 +382,17 @@
       try {
         await fetchCSV();
         applyAndRender();
-        document.getElementById('csvLink').href = csvUrl();
+        document.getElementById('csvLink').href = csvUrl(); // 更新附帶 _ts 的 CSV 連結
       } catch (e) {
         console.error(e);
       }
     }
 
+    // 綁定 UI
     document.getElementById('centerSel').addEventListener('change', (e)=>{
       currentCenter = e.target.value;
       updateHeading();
-      rebuildDateSelect();
+      rebuildDateSelect();   // 依中心重建日期清單
       applyAndRender();
     });
     document.getElementById('dateSel').addEventListener('change', (e)=>{
@@ -437,17 +400,8 @@
       applyAndRender();
     });
 
-    function updateHeading() {
-      const h1 = document.getElementById('pageTitle');
-      if (currentCenter) {
-        h1.textContent = `${currentCenter}｜每日人數`;
-      } else {
-        h1.textContent = `台中市各運動中心｜每日人數`;
-      }
-    }
-
     // 初始化
-    currentCenter = DEFAULT_CENTER;
+    currentCenter = DEFAULT_CENTER; // 進站先鎖定南屯
     updateHeading();
     initChart();
     refresh();
