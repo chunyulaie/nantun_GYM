@@ -3,19 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>台中市各運動中心｜人流（K 線）</title>
+  <title>台中市各運動中心｜人流</title>
 
   <!-- Luxon + Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
-  <!-- Financial chart (K 線) -->
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3"></script>
-  <!-- CSV 解析 -->
+  <!-- 可靠解析 Google Sheet CSV -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <style>
-    :root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; }
+    :root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; --accent:#2563eb; }
     html,body { height:100%; margin:0; background:var(--bg); color:var(--fg);
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC", Arial; }
     .wrap { max-width:1100px; margin:32px auto; padding:0 16px; }
@@ -29,24 +27,33 @@
       border:1px solid rgba(255,255,255,.1); font-size:14px; }
     .footer { color:var(--muted); font-size:13px; margin-top:10px; }
     a { color:#60a5fa; text-decoration:none; } a:hover{ text-decoration:underline; }
-    .chart-wrap{ height:460px; position:relative; }
+    .chart-wrap{ height:420px; position:relative; }
     canvas{ position:absolute; inset:0; width:100% !important; height:100% !important; display:block; }
-    select,label{ font-size:14px; }
-    .select { padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
-      background:rgba(255,255,255,.06); color:var(--fg); appearance:auto; }
-    .select option { background:#fff; color:#000; }
-    #maToggles label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
-    #maToggles input{ width:16px; height:16px; accent-color:#60a5fa; }
+
+    select, label { font-size:14px; }
+    .select {
+      padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
+      background:rgba(255,255,255,.06); color:var(--fg);
+      appearance:auto;
+    }
+    .select option { background:#fff; color:#000; } /* 展開列表白底黑字，避免看不到 */
+
+    /* 勾選區外觀（可自行微調） */
+    #seriesToggles label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+    #seriesToggles input[type="checkbox"]{
+      width:16px; height:16px; accent-color:#60a5fa;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1 id="pageTitle">南屯運動中心｜人流（K 線）</h1>
-      <p class="sub">來源：Google Sheet（CSV / all_centers）· 固定只顯示 06:00–22:00 · K 線為相鄰點近似蠟燭（open=前值、close=現值、high/low=兩者極值）</p>
+      <h1 id="pageTitle">南屯運動中心｜人流</h1>
+      <p class="sub">來源：Google Sheet（CSV 發佈 / all_centers 分頁）→ Chart.js（定時更新） · 固定只顯示 06:00–22:00</p>
 
       <div class="row">
-        <span class="pill">當前 <span id="itemNowLabel">游泳池</span>：<b id="itemNow">—</b> 人</span>
+        <span class="pill">游泳池 <b id="poolNow">—</b> 人</span>
+        <span class="pill">健身房 <b id="gymNow">—</b> 人</span>
         <span class="pill">最後更新：<span id="lastUpd">—</span></span>
       </div>
 
@@ -54,137 +61,152 @@
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           <div>
             <label for="centerSel" style="margin-right:6px;">運動中心：</label>
-            <select id="centerSel" class="select"><option disabled selected>載入中…</option></select>
+            <select id="centerSel" class="select">
+              <option value="" disabled selected>載入中…</option>
+            </select>
           </div>
           <div>
             <label for="dateSel" style="margin-right:6px;">日期：</label>
-            <select id="dateSel" class="select"><option disabled selected>載入中…</option></select>
-          </div>
-          <div>
-            <label for="itemSel" style="margin-right:6px;">項目：</label>
-            <select id="itemSel" class="select">
-              <option value="pool" selected>游泳池</option>
-              <option value="gym">健身房</option>
+            <select id="dateSel" class="select">
+              <option value="" disabled selected>載入中…</option>
             </select>
           </div>
         </div>
 
-        <!-- 移動均線顯示 -->
-        <div id="maToggles" style="display:flex; gap:12px; align-items:center;">
-          <label><input type="checkbox" value="ma5"  checked> MA5</label>
-          <label><input type="checkbox" value="ma10" checked> MA10</label>
-          <label><input type="checkbox" value="ma20" checked> MA20</label>
+        <!-- 勾選：切換顯示哪些線 -->
+        <div id="seriesToggles" style="display:flex; gap:12px; align-items:center; color:var(--fg)">
+          <label><input type="checkbox" value="pool" checked> 游泳池</label>
+          <label><input type="checkbox" value="gym" checked> 健身房</label>
         </div>
       </div>
 
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
 
       <div class="footer">
-        每 <span id="freqText">600</span> 秒自動更新 ·
+        只統計每日 06:00–22:00 · 每 <span id="freqText">600</span> 秒自動更新 ·
         <a id="csvLink" target="_blank" rel="noopener">查看 CSV</a>
       </div>
     </div>
   </div>
 
   <script>
-    // === 基本設定 ===
-    const DEFAULT_CENTER = '南屯運動中心';
-    const SHEET_GID_ALL_CENTERS = '840629068';
+    // === 設定 ===
+    const DEFAULT_CENTER = '南屯運動中心';        // 預設顯示
+    const SHEET_GID_ALL_CENTERS = '840629068';    // all_centers 的 gid
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTT8SPXPZk3LL7gyCkJclb2gjZ2OGMxfWvwuPmXR11c5P7IQ3Q1G6TDgz-X35ZuFqyVXViU50ZakONq/pub?output=csv";
-    const REFRESH_MS = 600_000;
-    const DAY_START = 6, DAY_END = 22;
+    const REFRESH_MS = 600_000; // 10 分鐘
+    const DAY_START = 6;  // 06:00
+    const DAY_END   = 22; // 到 22:59 都算（含 22）
 
-    // 顏色（漲紅跌綠）
-    const RED   = 'rgba(239,68,68,1)';    // red-500
-    const GREEN = 'rgba(34,197,94,1)';    // green-500
-    const MA5C  = 'rgba(96,165,250,1)';   // blue-400
-    const MA10C = 'rgba(234,179,8,1)';    // amber-500
-    const MA20C = 'rgba(156,163,175,1)';  // gray-400
-
-    function csvUrl(){
+    function csvUrl() {
       const u = new URL(CSV_BASE);
       u.searchParams.set('gid', SHEET_GID_ALL_CENTERS);
-      u.searchParams.set('_ts', Date.now());
+      u.searchParams.set('_ts', Date.now()); // 防快取
       return u.toString();
     }
     document.getElementById('csvLink').href = csvUrl();
     document.getElementById('freqText').textContent = Math.round(REFRESH_MS/1000);
 
-    // 解析時間
+    // 解析台北時區時間（支援多種格式）
     function parseTWDateMs(tStr) {
-      const opt = { zone:'Asia/Taipei' };
+      const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
       let dt;
-      dt = luxon.DateTime.fromFormat(tStr,'yyyy-MM-dd HH:mm:ss',opt); if(dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr,'yyyy-MM-dd HH:mm',opt);    if(dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromISO(tStr,opt);                          if(dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm:ss', opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm', opts);    if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);   if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);      if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);  if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);     if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });        if (dt.isValid) return dt.toMillis();
       return NaN;
     }
 
-    // 欄位對應
-    function pick(obj, rx){
-      for(const k of Object.keys(obj)){
+    // 欄位對應（容錯多種命名 + 去掉 BOM）
+    function pick(obj, keysRegex) {
+      for (const k of Object.keys(obj)) {
         const nk = k.replace(/\ufeff/g,'').trim();
-        if(rx.test(nk)) return obj[k];
+        if (keysRegex.test(nk)) return obj[k];
       }
       return undefined;
     }
     const RX_TIME   = /(時間|timestamp)/i;
-    const RX_CENTER = /(中心|運動中心|館|場館|中心名稱|center)/i;
+    const RX_CENTER = /(中心|運動中心|館|場館|館別|中心名稱|center)/i;
     const RX_POOL   = /(游泳池|pool|swim)/i;
     const RX_GYM    = /(健身|健身房|gym|weight)/i;
 
-    // 狀態
+    /** @type {{t:number, center:string, pool:number, gym:number, isoDate:string}[]} */
     let rows = [];
-    let currentCenter = DEFAULT_CENTER;
-    let currentIsoDate = '';
-    let currentItem = 'pool'; // pool or gym
+    let currentCenter = DEFAULT_CENTER;  // 預設南屯
+    let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
 
-    // 藤蔓動畫
+    // ====== 穩定版「藤蔓生成」插件（無跳動）======
     const VineRevealPlugin = {
-      id:'vineReveal', duration:2500,
-      afterInit(c){ this.restart(c); },
-      restart(c){
-        if(c.$vineRAF) cancelAnimationFrame(c.$vineRAF);
-        c.$vineStart = performance.now(); c.$vineProgress = 0;
-        const tick = ()=>{
-          const t = Math.min(1,(performance.now()-c.$vineStart)/(this.duration||2500));
-          c.$vineProgress = t; c.draw(); if(t<1) c.$vineRAF = requestAnimationFrame(tick);
+      id: 'vineReveal',
+      duration: 2500, // ms
+      afterInit(chart) { this.restart(chart); },
+      restart(chart) {
+        if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF);
+        chart.$vineStart = performance.now();
+        chart.$vineProgress = 0;
+        const tick = () => {
+          const now = performance.now();
+          const t = Math.min(1, (now - chart.$vineStart) / (this.duration || 2500));
+          chart.$vineProgress = t;
+          chart.draw();
+          if (t < 1) chart.$vineRAF = requestAnimationFrame(tick);
         };
-        c.$vineRAF = requestAnimationFrame(tick);
+        chart.$vineRAF = requestAnimationFrame(tick);
       },
-      beforeDatasetsDraw(c){
-        const t = c.$vineProgress ?? 1; if(t>=1) return;
-        const {ctx, chartArea} = c; const ease = 1-Math.pow(1-t,3);
-        ctx.save(); ctx.beginPath();
-        ctx.rect(chartArea.left, chartArea.top, (chartArea.right-chartArea.left)*ease, (chartArea.bottom-chartArea.top));
-        ctx.clip(); ctx.globalAlpha = 0.4+0.6*ease; c.$vineClipped = true;
+      beforeDatasetsDraw(chart) {
+        const t = chart.$vineProgress ?? 1;
+        if (t >= 1) return;
+        const {ctx, chartArea} = chart;
+        const ease = 1 - Math.pow(1 - t, 3);
+        const w = chartArea.right - chartArea.left;
+        const h = chartArea.bottom - chartArea.top;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(chartArea.left, chartArea.top, w * ease, h);
+        ctx.clip();
+        ctx.globalAlpha = 0.4 + 0.6 * ease;
+        chart.$vineClipped = true;
       },
-      afterDatasetsDraw(c){ if(c.$vineClipped){ c.ctx.restore(); c.$vineClipped=false; } },
-      destroy(c){ if(c.$vineRAF) cancelAnimationFrame(c.$vineRAF); }
+      afterDatasetsDraw(chart) {
+        if (chart.$vineClipped) {
+          chart.ctx.restore();
+          chart.$vineClipped = false;
+        }
+      },
+      destroy(chart) {
+        if (chart.$vineRAF) cancelAnimationFrame(chart.$vineRAF);
+      }
     };
     Chart.register(VineRevealPlugin);
 
-    // 載入 CSV
-    async function fetchCSV(){
-      const res = await fetch(csvUrl(), {cache:'no-store'});
-      if(!res.ok) throw new Error('HTTP '+res.status);
+    async function fetchCSV() {
+      const res = await fetch(csvUrl(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = await res.text();
-      const parsed = Papa.parse(text,{header:true,skipEmptyLines:true});
+
+      const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+      if (parsed.errors?.length) console.warn('CSV parse warnings:', parsed.errors.slice(0,3));
+
       const tmp = [];
-      for(const r of parsed.data){
-        const tStr = (pick(r, RX_TIME) ?? '').toString().trim();
+      for (const r of parsed.data) {
+        const tStr   = (pick(r, RX_TIME)   ?? '').toString().trim();
         const center = (pick(r, RX_CENTER) ?? '').toString().trim();
-        const pool = Number((pick(r, RX_POOL) ?? '').toString().trim()) || 0;
-        const gym  = Number((pick(r, RX_GYM)  ?? '').toString().trim()) || 0;
+        const pool   = Number((pick(r, RX_POOL) ?? '').toString().trim()) || 0;
+        const gym    = Number((pick(r, RX_GYM)  ?? '').toString().trim()) || 0;
         const t = parseTWDateMs(tStr);
-        if(!center || Number.isNaN(t)) continue;
+        if (!center || Number.isNaN(t)) continue;
+
+        // 以台北時區取「日期字串」
         const dt = luxon.DateTime.fromMillis(t).setZone('Asia/Taipei');
-        const h = dt.hour; if(h < DAY_START || h > DAY_END) continue;
-        const isoDate = dt.toISODate();
-        // 排除 07-22 期間 pool/gym 同為 0 的明顯漏抓
-        if(h>=7 && h<=22 && pool===0 && gym===0) continue;
-        // 個別場館異常值可在此排除
-        tmp.push({t, center, pool, gym, isoDate});
+        const h  = dt.hour;
+        if (h < DAY_START || h > DAY_END) continue;  // 固定只看 06–22
+        const isoDate = dt.toISODate(); // yyyy-MM-dd
+
+        tmp.push({ t, center, pool, gym, isoDate });
       }
       tmp.sort((a,b)=>a.t-b.t);
       rows = tmp;
@@ -195,202 +217,222 @@
       updateHeading();
     }
 
-    function rebuildCenterSelect(){
+    function rebuildCenterSelect() {
       const centers = Array.from(new Set(rows.map(r=>r.center))).filter(Boolean)
         .sort((a,b)=>a.localeCompare(b,'zh-Hant'));
       const sel = document.getElementById('centerSel');
-      if(!centers.length){ sel.innerHTML = `<option disabled selected>（找不到資料）</option>`; return; }
+      if (centers.length === 0) {
+        sel.innerHTML = `<option value="" disabled selected>（找不到資料）</option>`;
+        return;
+      }
       sel.innerHTML = centers.map(c=>`<option value="${c}">${c}</option>`).join('');
-      if(!centers.includes(currentCenter)) currentCenter = centers[0];
+      if (!centers.includes(currentCenter)) currentCenter = centers[0];
       sel.value = currentCenter;
     }
-    function rebuildDateSelect(){
+
+    function rebuildDateSelect() {
+      // 僅取當前中心的可用日期列表
       const dates = Array.from(new Set(rows.filter(r=>r.center===currentCenter).map(r=>r.isoDate)))
-        .sort((a,b)=>b.localeCompare(a));
+        .sort((a,b)=> b.localeCompare(a)); // 由新到舊
       const sel = document.getElementById('dateSel');
-      if(!dates.length){ sel.innerHTML = `<option disabled selected>（此中心無資料）</option>`; currentIsoDate=''; return; }
+      if (dates.length === 0) {
+        sel.innerHTML = `<option value="" disabled selected>（此中心無資料）</option>`;
+        currentIsoDate = '';
+        return;
+      }
       sel.innerHTML = dates.map(d=>`<option value="${d}">${d}</option>`).join('');
-      if(!dates.includes(currentIsoDate)) currentIsoDate = dates[0];
+      if (!dates.includes(currentIsoDate)) currentIsoDate = dates[0]; // 預設最新一天
       sel.value = currentIsoDate;
     }
-    function ensureDefaults(){
-      if(!currentCenter){ const any = rows[0]?.center; if(any) currentCenter = any; }
-      if(!currentIsoDate){ const any = rows.find(r=>r.center===currentCenter)?.isoDate; if(any) currentIsoDate = any; }
-    }
-    function updateHeading(){
-      document.getElementById('pageTitle').textContent = `${currentCenter || '台中市各運動中心'}｜人流（K 線）`;
-      document.getElementById('itemNowLabel').textContent = currentItem==='pool'?'游泳池':'健身房';
-    }
 
-    // 取一日 + 指定項目資料
-    function sliceSeries(){
-      const arr = rows.filter(r=>r.center===currentCenter && r.isoDate===currentIsoDate)
-                      .map(r=>({ x:r.t, v: currentItem==='pool'? r.pool : r.gym }));
-      return arr;
-    }
-
-    // 近似蠟燭：open=前值, close=現值, high/low=兩者的極值
-    function buildOhlc(series){
-      const out = [];
-      for(let i=0;i<series.length;i++){
-        const t = series[i].x;
-        const cur = series[i].v;
-        const prev = (i>0? series[i-1].v : cur);
-        const hi = Math.max(prev, cur);
-        const lo = Math.min(prev, cur);
-        out.push({ x:t, o:prev, h:hi, l:lo, c:cur });
+    function ensureDefaults() {
+      if (!currentCenter) {
+        const any = rows[0]?.center;
+        if (any) currentCenter = any;
       }
-      return out;
+      if (!currentIsoDate) {
+        const any = rows.find(r=>r.center===currentCenter)?.isoDate;
+        if (any) currentIsoDate = any;
+      }
     }
 
-    // 移動均線（簡單移動平均，回傳 {x, y} 給折線使用）
-    function SMA(series, win){
-      const ys = series.map(s=>s.v);
-      const xs = series.map(s=>s.x);
-      const out = [];
-      let sum=0;
-      for(let i=0;i<ys.length;i++){
-        sum += ys[i];
-        if(i>=win) sum -= ys[i-win];
-        if(i>=win-1) out.push({ x: xs[i], y: sum/win });
-        else out.push({ x: xs[i], y: NaN });  // 讓前幾點斷線
+    // 依中心 + 日期切片，並在 07:00~22:00 時把 (pool=0 & gym=0) 的點排除
+    function sliceForChart() {
+      const filtered = rows.filter(r => {
+        if (r.center !== currentCenter || r.isoDate !== currentIsoDate) return false;
+        const hour = luxon.DateTime.fromMillis(r.t).setZone('Asia/Taipei').hour;
+        if (hour >= 7 && hour <= 22 && r.pool === 0 && r.gym === 0) return false;
+        if (r.center === '港區運動中心' && r.gym === 100) return false; // 👈 過濾掉異常值
+        return true;
+      });
+
+      return {
+        times: filtered.map(r=>r.t),
+        pool:  filtered.map(r=>r.pool),
+        gym:   filtered.map(r=>r.gym),
+      };
+    }
+
+    // 更新頁面主標題
+    function updateHeading() {
+      const h1 = document.getElementById('pageTitle');
+      if (currentCenter) {
+        h1.textContent = `${currentCenter}｜人流`;
+      } else {
+        h1.textContent = `台中市各運動中心｜人流`;
       }
-      return out;
     }
 
     let chart;
-    function initChart(){
-      if(chart) return chart;
+    function initChart() {
+      if (chart) return chart;
       const ctx = document.getElementById('chart').getContext('2d');
       chart = new Chart(ctx, {
-        type: 'candlestick',
-        data: {
-          datasets: [
-            // 0: K 線
-            {
-              label: 'K 線',
-              data: [],
-              // 紅漲綠跌
-              color: {
-                up: RED, down: GREEN, unchanged: 'rgba(148,163,175,1)'
-              },
-              borderColor: {
-                up: RED, down: GREEN, unchanged: 'rgba(148,163,175,1)'
-              }
-            },
-            // 1~3: MA5/10/20
-            {
-              label: 'MA5', data: [], type: 'line', borderColor: MA5C,
-              borderWidth: 1.8, tension: 0.2, pointRadius: 0
-            },
-            {
-              label: 'MA10', data: [], type: 'line', borderColor: MA10C,
-              borderWidth: 1.8, tension: 0.2, pointRadius: 0
-            },
-            {
-              label: 'MA20', data: [], type: 'line', borderColor: MA20C,
-              borderWidth: 1.8, tension: 0.2, pointRadius: 0
-            }
-          ]
-        },
+        type: 'line',
+        data: { labels: [], datasets: [
+          {
+            label: '游泳池人數',
+            data: [],
+            borderWidth: 3,
+            tension: 0.5,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            borderCapStyle: 'round',
+            borderJoinStyle: 'round',
+            borderColor: 'rgba(99,102,241,1)',      // indigo
+            backgroundColor: 'rgba(99,102,241,0.15)',
+            fill: 'origin'
+          },
+          {
+            label: '健身房人數',
+            data: [],
+            borderWidth: 3,
+            tension: 0.35,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            borderCapStyle: 'round',
+            borderJoinStyle: 'round',
+            borderColor: 'rgba(16,185,129,1)',      // emerald
+            backgroundColor: 'rgba(16,185,129,0.15)',
+            fill: 'origin'
+          }
+        ]},
         options: {
-          responsive:true, maintainAspectRatio:false,
-          interaction:{ mode:'nearest', intersect:false },
-          animation:{ duration:700, easing:'easeOutQuart' },
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode:'nearest', intersect:false },
+          animation: { duration: 700, easing: 'easeOutQuart' }, // Chart.js 自己的補間
           plugins: {
-            legend: { labels:{ color:'#e5e7eb' } },
-            tooltip: {
-              callbacks:{
-                title: (items)=> items.length
-                  ? luxon.DateTime.fromMillis(items[0].parsed.x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss')
-                  : ''
-              }
-            }
+            legend: { labels: { color:'#e5e7eb' } },
+            tooltip: { callbacks: {
+              title: (items) => items.length
+                ? luxon.DateTime.fromMillis(items[0].parsed.x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss')
+                : ''
+            }}
           },
           scales: {
             x: {
-              type:'time',
-              adapters:{ date:{ zone:'Asia/Taipei' } },
-              time:{ unit:'hour', stepSize:1, displayFormats:{ hour:'HH:mm', minute:'HH:mm' }, tooltipFormat:'HH:mm' },
-              ticks:{ color:'#e5e7eb', maxRotation:0, minRotation:0, maxTicksLimit:10 },
-              grid:{ color:'rgba(255,255,255,.08)' }, border:{ color:'rgba(255,255,255,.15)' }
+              type: 'time',
+              adapters: { date: { zone: 'Asia/Taipei' } },
+              time: {
+                unit: 'hour',
+                stepSize: 1,
+                displayFormats: { hour: 'HH:mm', minute: 'HH:mm' }, // 只顯示時間
+                tooltipFormat: 'HH:mm'
+              },
+              ticks: {
+                color: '#e5e7eb',
+                autoSkip: true,
+                maxRotation: 0,
+                minRotation: 0,
+                maxTicksLimit: 10,
+                // 保險：強制回 HH:mm
+                callback: (val) => luxon.DateTime.fromMillis(val).setZone('Asia/Taipei').toFormat('HH:mm')
+              },
+              grid: { color: 'rgba(255,255,255,.08)' },     // 深色背景可見的格線
+              border: { color: 'rgba(255,255,255,.15)' }    // 軸線顏色
             },
             y: {
-              beginAtZero:true, ticks:{ color:'#e5e7eb' },
-              grid:{ color:'rgba(255,255,255,.08)' },
-              title:{ display:true, text:'人數', color:'#e5e7eb' },
-              border:{ color:'rgba(255,255,255,.15)' }
+              beginAtZero: true,
+              ticks: { color: '#e5e7eb' },
+              grid: { color: 'rgba(255,255,255,.08)' },     // 保留 Y 軸輔助線
+              title: { display: true, text: '人數', color: '#e5e7eb' },
+              border: { color: 'rgba(255,255,255,.15)' }
             }
-          },
-          // 讓藤蔓動畫生效
-          plugins: { ...Chart.defaults.plugins, vineReveal: {} }
+          }
         }
       });
       return chart;
     }
 
-    function applyMAToggles(){
-      if(!chart) return;
-      const on = new Set(Array.from(document.querySelectorAll('#maToggles input:checked')).map(i=>i.value));
-      // dataset 1:MA5, 2:MA10, 3:MA20
-      chart.data.datasets[1].hidden = !on.has('ma5');
-      chart.data.datasets[2].hidden = !on.has('ma10');
-      chart.data.datasets[3].hidden = !on.has('ma20');
+    // 勾選框控制可見度
+    function applyCheckboxVisibility() {
+      if (!chart) return;
+      const checked = Array.from(document.querySelectorAll('#seriesToggles input:checked'))
+                           .map(cb => cb.value);
+      // datasets[0] = 游泳池, datasets[1] = 健身房
+      chart.data.datasets[0].hidden = !checked.includes('pool');
+      chart.data.datasets[1].hidden = !checked.includes('gym');
       chart.update('none');
     }
 
-    function applyAndRender(){
-      const series = sliceSeries();               // {x, v}
-      const ohlc = buildOhlc(series);             // {x,o,h,l,c}
-      const ma5  = SMA(series,5);
-      const ma10 = SMA(series,10);
-      const ma20 = SMA(series,20);
-
+    function applyAndRender() {
       const c = initChart();
-      c.data.datasets[0].data = ohlc;
-      c.data.datasets[1].data = ma5;
-      c.data.datasets[2].data = ma10;
-      c.data.datasets[3].data = ma20;
+      const { times, pool, gym } = sliceForChart();
+      c.data.labels = times;
+      c.data.datasets[0].data = pool;
+      c.data.datasets[1].data = gym;
 
-      // 藤蔓重啟
+      // 重新啟動「藤蔓生成」動畫（每次換中心/日期或重新抓資料時）
       const plugin = Chart.registry.getPlugin('vineReveal');
-      if(plugin && typeof plugin.restart==='function') plugin.restart(c);
+      if (plugin && typeof plugin.restart === 'function') {
+        plugin.restart(c);
+      }
 
+      // 用 'none' 讓我們的 RAF 控制重繪，不跟 Chart.js 內建動畫衝突
       c.update('none');
 
-      if(series.length){
-        document.getElementById('itemNow').textContent = series[series.length-1].v;
+      if (times.length) {
+        document.getElementById('poolNow').textContent = pool[pool.length-1];
+        document.getElementById('gymNow').textContent  = gym[gym.length-1];
         document.getElementById('lastUpd').textContent =
-          luxon.DateTime.fromMillis(series[series.length-1].x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
-      }else{
-        document.getElementById('itemNow').textContent = '—';
+          luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
+      } else {
+        document.getElementById('poolNow').textContent = '—';
+        document.getElementById('gymNow').textContent  = '—';
         document.getElementById('lastUpd').textContent = '—';
       }
 
-      applyMAToggles();
+      // 每次重繪後依勾選狀態調整可見度
+      applyCheckboxVisibility();
     }
 
-    async function refresh(){
-      try{
+    async function refresh() {
+      try {
         await fetchCSV();
         applyAndRender();
-        document.getElementById('csvLink').href = csvUrl();
-      }catch(e){ console.error(e); }
+        document.getElementById('csvLink').href = csvUrl(); // 更新附帶 _ts 的 CSV 連結
+      } catch (e) {
+        console.error(e);
+      }
     }
 
-    // 事件
-    document.getElementById('centerSel').addEventListener('change', e=>{
-      currentCenter = e.target.value; updateHeading(); rebuildDateSelect(); applyAndRender();
+    // 綁定 UI
+    document.getElementById('centerSel').addEventListener('change', (e)=>{
+      currentCenter = e.target.value;
+      updateHeading();
+      rebuildDateSelect();   // 依中心重建日期清單
+      applyAndRender();
     });
-    document.getElementById('dateSel').addEventListener('change', e=>{
-      currentIsoDate = e.target.value; applyAndRender();
+    document.getElementById('dateSel').addEventListener('change', (e)=>{
+      currentIsoDate = e.target.value;
+      applyAndRender();
     });
-    document.getElementById('itemSel').addEventListener('change', e=>{
-      currentItem = e.target.value; updateHeading(); applyAndRender();
-    });
-    document.getElementById('maToggles').addEventListener('change', applyMAToggles);
+
+    // 勾選框事件：即時套用
+    document.getElementById('seriesToggles').addEventListener('change', applyCheckboxVisibility);
 
     // 初始化
+    currentCenter = DEFAULT_CENTER; // 進站先鎖定南屯
     updateHeading();
     initChart();
     refresh();
