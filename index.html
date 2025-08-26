@@ -26,18 +26,15 @@
     .sub { color:var(--muted); margin:0 0 12px; font-size:14px; }
     .row { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px; align-items:center; }
     .pill { padding:8px 12px; border-radius:999px; background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.1); font-size:14px; }
+      border:1px solid rgba(255,255,255,.1); font-size:14px; white-space:nowrap; }
     .footer { color:var(--muted); font-size:13px; margin-top:10px; }
     a { color:#60a5fa; text-decoration:none; } a:hover{ text-decoration:underline; }
     .chart-wrap{ height:420px; position:relative; }
     canvas{ position:absolute; inset:0; width:100% !important; height:100% !important; display:block; }
 
     select, label { font-size:14px; }
-    .select {
-      padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
-      background:rgba(255,255,255,.06); color:var(--fg);
-      appearance:auto;
-    }
+    .select { padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15);
+      background:rgba(255,255,255,.06); color:var(--fg); appearance:auto; }
     .select option { background:#fff; color:#000; }
     #seriesToggles label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
     #seriesToggles input[type="checkbox"]{ width:16px; height:16px; accent-color:#60a5fa; }
@@ -50,7 +47,6 @@
       <p class="sub">來源：Google Sheet（CSV / all_centers 分頁）→ Chart.js（定時更新） · 固定只顯示 06:00–22:00</p>
 
       <div class="row">
-        <!-- 顯示 x/上限 與 % -->
         <span class="pill">游泳池 <b id="poolNow">—</b> / <span id="poolMax">—</span> 人（<span id="poolPct">—%</span>）</span>
         <span class="pill">健身房 <b id="gymNow">—</b> / <span id="gymMax">—</span> 人（<span id="gymPct">—%</span>）</span>
         <span class="pill">最後更新：<span id="lastUpd">—</span></span>
@@ -71,9 +67,11 @@
             </select>
           </div>
         </div>
+
         <div id="seriesToggles" style="display:flex; gap:12px; align-items:center; color:var(--fg)">
           <label><input type="checkbox" value="pool" checked> 游泳池</label>
           <label><input type="checkbox" value="gym" checked> 健身房</label>
+          <label style="margin-left:8px;"><input type="checkbox" id="pctMode"> 使用率%</label>
         </div>
       </div>
 
@@ -153,6 +151,7 @@
     let rows = [];
     let currentCenter = DEFAULT_CENTER;  // 預設南屯
     let currentIsoDate = '';             // 例如 '2025-08-14'
+    let SCALE_MODE = 'abs';              // 'abs' | 'pct'
 
     // ====== 自訂動畫插件（藤蔓生成）======
     const VineRevealPlugin = {
@@ -197,7 +196,7 @@
       }
     };
     Chart.register(VineRevealPlugin);
-    // 註冊 annotation 插件（CDN 會暴露為全域 ChartAnnotation）
+    // 註冊 annotation 插件
     Chart.register(window.ChartAnnotation || window['chartjs-plugin-annotation']);
 
     async function fetchCSV() {
@@ -319,7 +318,7 @@
             pointHoverRadius: 6,
             borderCapStyle: 'round',
             borderJoinStyle: 'round',
-            borderColor: 'rgba(99,102,241,1)',      // indigo
+            borderColor: 'rgba(99,102,241,1)',
             backgroundColor: 'rgba(99,102,241,0.15)',
             fill: 'origin'
           },
@@ -332,7 +331,7 @@
             pointHoverRadius: 6,
             borderCapStyle: 'round',
             borderJoinStyle: 'round',
-            borderColor: 'rgba(16,185,129,1)',      // emerald
+            borderColor: 'rgba(16,185,129,1)',
             backgroundColor: 'rgba(16,185,129,0.15)',
             fill: 'origin'
           }
@@ -343,11 +342,18 @@
           animation: { duration: 700, easing: 'easeOutQuart' },
           plugins: {
             legend: { labels: { color:'#e5e7eb' } },
-            tooltip: { callbacks: {
-              title: (items) => items.length
-                ? luxon.DateTime.fromMillis(items[0].parsed.x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss')
-                : ''
-            }},
+            tooltip: {
+              callbacks: {
+                title: (items) => items.length
+                  ? luxon.DateTime.fromMillis(items[0].parsed.x).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss')
+                  : '',
+                label: (item) => {
+                  const v = item.parsed.y;
+                  if (SCALE_MODE === 'pct') return `${item.dataset.label.replace('人數','')}使用率：${v != null ? v : '—'}%`;
+                  return `${item.dataset.label}：${v != null ? v : '—'} 人`;
+                }
+              }
+            },
             annotation: {
               annotations: {
                 poolCap: {
@@ -423,48 +429,73 @@
       );
     }
 
+    // 百分比轉換
+    function toPct(arr, cap){
+      if (!Number.isFinite(cap)) return arr.map(()=>null);
+      return arr.map(v => Number.isFinite(v) ? Math.round((v/cap)*100) : null);
+    }
+
     // 依勾選狀態，動態設定 Y 軸上限與上限虛線顯示
     function updateYAxisAndCaps(chart, poolData, gymData) {
       const checked = getCheckedSeries();
-
-      // 當前中心的上限
       const cap = CAPACITY[currentCenter] || {};
       const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
       const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
-
-      // 只取「可見」資料與上限來決定刻度
-      const parts = [0]; // 保底
-      if (checked.has('pool')) {
-        parts.push(...(poolData || []).filter(Number.isFinite));
-        if (poolCap != null) parts.push(poolCap);
-      }
-      if (checked.has('gym')) {
-        parts.push(...(gymData || []).filter(Number.isFinite));
-        if (gymCap != null) parts.push(gymCap);
-      }
-
-      const dataMax = parts.length ? Math.max(...parts) : 0;
-      const yMax = dataMax > 0 ? Math.ceil(dataMax * 1.1) : 10;
-      chart.options.scales.y.suggestedMax = yMax;
-
-      // 上限虛線：只有被勾選的才顯示
       const anns = chart.options.plugins?.annotation?.annotations;
+      const y = chart.options.scales.y;
+
+      if (SCALE_MODE === 'pct') {
+        // 百分比模式：Y 軸固定 0–100，虛線在 100%
+        y.beginAtZero = true;
+        y.suggestedMax = 100;
+        y.title.text = '使用率 %';
+
+        if (anns) {
+          if (checked.has('pool') && poolCap != null) {
+            anns.poolCap.display = true;
+            anns.poolCap.yMin = anns.poolCap.yMax = 100;
+            anns.poolCap.label.content = '泳池上限 100%';
+          } else anns.poolCap.display = false;
+
+          if (checked.has('gym') && gymCap != null) {
+            anns.gymCap.display = true;
+            anns.gymCap.yMin = anns.gymCap.yMax = 100;
+            anns.gymCap.label.content = '健身房上限 100%';
+          } else anns.gymCap.display = false;
+        }
+        return;
+      }
+
+      // 絕對值模式：只用「可見資料」決定 Y 軸，避免被超大上限拉高
+      y.title.text = '人數';
+      const parts = [0];
+      if (checked.has('pool')) parts.push(...(poolData||[]).filter(Number.isFinite));
+      if (checked.has('gym'))  parts.push(...(gymData ||[]).filter(Number.isFinite));
+      const dataMax = parts.length ? Math.max(...parts) : 0;
+
+      // 只在上限不比資料大太多（<= 2 倍）時才把上限納入 yMax
+      const maybeIncludeCap = (capVal) => (Number.isFinite(capVal) && capVal <= dataMax * 2) ? capVal : null;
+      const capForScale = Math.max(
+        maybeIncludeCap(poolCap) ?? 0,
+        maybeIncludeCap(gymCap)  ?? 0
+      );
+
+      const yMaxBase = Math.max(dataMax, capForScale);
+      y.suggestedMax = yMaxBase > 0 ? Math.ceil(yMaxBase * 1.1) : 10;
+
       if (anns) {
-        if (checked.has('pool') && poolCap != null) {
+        // 畫在圖內的上限（若過大就隱藏，避免擠壓）
+        if (checked.has('pool') && poolCap != null && poolCap <= y.suggestedMax) {
           anns.poolCap.display = true;
           anns.poolCap.yMin = anns.poolCap.yMax = poolCap;
           anns.poolCap.label.content = `泳池上限 ${poolCap}`;
-        } else {
-          anns.poolCap.display = false;
-        }
+        } else anns.poolCap.display = false;
 
-        if (checked.has('gym') && gymCap != null) {
+        if (checked.has('gym') && gymCap != null && gymCap <= y.suggestedMax) {
           anns.gymCap.display = true;
           anns.gymCap.yMin = anns.gymCap.yMax = gymCap;
           anns.gymCap.label.content = `健身房上限 ${gymCap}`;
-        } else {
-          anns.gymCap.display = false;
-        }
+        } else anns.gymCap.display = false;
       }
     }
 
@@ -476,9 +507,7 @@
       chart.data.datasets[0].hidden = !checked.includes('pool'); // 泳池
       chart.data.datasets[1].hidden = !checked.includes('gym');  // 健身
 
-      // 依最新勾選狀態重算 Y 軸與上限虛線
       updateYAxisAndCaps(chart, chart.data.datasets[0].data, chart.data.datasets[1].data);
-
       chart.update('none');
     }
 
@@ -491,9 +520,17 @@
       const c = initChart();
       const { times, pool, gym } = sliceForChart();
 
+      // 依模式準備資料
+      const cap = CAPACITY[currentCenter] || {};
+      let poolData = pool, gymData = gym;
+      if (SCALE_MODE === 'pct') {
+        poolData = toPct(pool, cap.pool);
+        gymData  = toPct(gym,  cap.gym);
+      }
+
       c.data.labels = times;
-      c.data.datasets[0].data = pool;
-      c.data.datasets[1].data = gym;
+      c.data.datasets[0].data = poolData;
+      c.data.datasets[1].data = gymData;
 
       // 重新啟動動畫
       const plugin = Chart.registry.getPlugin('vineReveal');
@@ -505,7 +542,7 @@
       // 套用更新
       c.update('none');
 
-      // 更新頁面 pill 數字與時間
+      // 更新頁面 pill 數字與時間（pill 一律顯示「絕對人數 + %」）
       if (times.length) {
         document.getElementById('lastUpd').textContent =
           luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
@@ -513,22 +550,20 @@
         document.getElementById('lastUpd').textContent = '—';
       }
 
-      const poolNow = lastFinite(pool);
-      const gymNow  = lastFinite(gym);
-      document.getElementById('poolNow').textContent = (poolNow != null) ? poolNow : '—';
-      document.getElementById('gymNow').textContent  = (gymNow  != null) ? gymNow  : '—';
+      const poolNowAbs = lastFinite(pool);
+      const gymNowAbs  = lastFinite(gym);
+      document.getElementById('poolNow').textContent = (poolNowAbs != null) ? poolNowAbs : '—';
+      document.getElementById('gymNow').textContent  = (gymNowAbs  != null) ? gymNowAbs  : '—';
 
-      const cap = CAPACITY[currentCenter] || {};
       const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
       const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
-
       const nf = new Intl.NumberFormat('zh-TW');
       const showPct = (now, cap) => (cap > 0 && now != null) ? `${Math.round((now / cap) * 100)}%` : '—%';
 
       document.getElementById('poolMax').textContent = (poolCap != null) ? nf.format(poolCap) : '—';
       document.getElementById('gymMax').textContent  = (gymCap  != null) ? nf.format(gymCap)  : '—';
-      document.getElementById('poolPct').textContent = (poolCap != null) ? showPct(poolNow, poolCap) : '—%';
-      document.getElementById('gymPct').textContent  = (gymCap  != null) ? showPct(gymNow,  gymCap)  : '—%';
+      document.getElementById('poolPct').textContent = (poolCap != null) ? showPct(poolNowAbs, poolCap) : '—%';
+      document.getElementById('gymPct').textContent  = (gymCap  != null) ? showPct(gymNowAbs,  gymCap)  : '—%';
     }
 
     async function refresh() {
@@ -553,6 +588,10 @@
       applyAndRender();
     });
     document.getElementById('seriesToggles').addEventListener('change', applyCheckboxVisibility);
+    document.getElementById('pctMode').addEventListener('change', (e)=>{
+      SCALE_MODE = e.target.checked ? 'pct' : 'abs';
+      applyAndRender();
+    });
 
     // 初始化
     currentCenter = DEFAULT_CENTER;
