@@ -349,7 +349,32 @@
                   : '',
                 label: (item) => {
                   const v = item.parsed.y;
-                  if (SCALE_MODE === 'pct') return `${item.dataset.label.replace('人數','')}使用率：${v != null ? v : '—'}%`;
+                  if (SCALE_MODE === 'pct') {
+                    // 百分比模式：Y 軸固定 0–100
+                    y.beginAtZero = true;
+                    y.suggestedMax = 100;
+                    y.title.text = '使用率 %';
+                  
+                    if (anns) {
+                      const showPool = checked.has('pool') && poolCap != null;
+                      const showGym  = checked.has('gym')  && gymCap  != null;
+                  
+                      // 只畫 100% 的虛線，不顯示標籤
+                      anns.poolCap.display = showPool;
+                      if (showPool) {
+                        anns.poolCap.yMin = anns.poolCap.yMax = 100;
+                        anns.poolCap.label.display = false;   // ← 關掉「游泳池上限100%」文字
+                      }
+                  
+                      anns.gymCap.display = showGym;
+                      if (showGym) {
+                        anns.gymCap.yMin = anns.gymCap.yMax = 100;
+                        anns.gymCap.label.display = false;    // ← 關掉「健身房上限100%」文字
+                      }
+                    }
+                    return;
+                  }
+
                   return `${item.dataset.label}：${v != null ? v : '—'} 人`;
                 }
               }
@@ -366,7 +391,9 @@
                   label: {
                     display: true,
                     content: '泳池上限',
-                    position: 'start',
+                    position: 'end',  // ← 由左上改到右緣
+                    xAdjust: -6,      // ← 微調到圖內
+                    yAdjust: -6,
                     backgroundColor: 'rgba(99,102,241,.15)',
                     color: '#e5e7eb'
                   }
