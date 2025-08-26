@@ -85,13 +85,16 @@
   </div>
 
   <script>
-    // === 設定 ===
+    // === 基本設定 ===
     const DEFAULT_CENTER = '南屯運動中心';
     const SHEET_GID_ALL_CENTERS = '840629068'; // all_centers 分頁 gid
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/1dc9bQyHppywqpy82E-OIV4HYoXFgTcXbxNexlV4_5dE/export?format=csv";
     const REFRESH_MS = 600_000; // 10 分鐘
     const DAY_START = 6;  // 06:00
     const DAY_END   = 22; // 到 22:59 都算（含 22）
+
+    // 人數模式下，達到上限多少比例才顯示「該條」上限虛線（各別判斷）
+    const CAP_SHOW_THRESHOLD = 0.85;  // 85%
 
     // 各中心上限（無上限填 null）
     const CAPACITY = {
@@ -153,7 +156,7 @@
     let currentIsoDate = '';             // 例如 '2025-08-14'
     let SCALE_MODE = 'abs';              // 'abs' | 'pct'
 
-    // ====== 自訂動畫插件（藤蔓生成）======
+    // 自訂動畫插件（藤蔓生成）
     const VineRevealPlugin = {
       id: 'vineReveal',
       duration: 2500,
@@ -196,7 +199,6 @@
       }
     };
     Chart.register(VineRevealPlugin);
-    // 註冊 annotation 插件
     Chart.register(window.ChartAnnotation || window['chartjs-plugin-annotation']);
 
     async function fetchCSV() {
@@ -349,32 +351,7 @@
                   : '',
                 label: (item) => {
                   const v = item.parsed.y;
-                  if (SCALE_MODE === 'pct') {
-                    // 百分比模式：Y 軸固定 0–100
-                    y.beginAtZero = true;
-                    y.suggestedMax = 100;
-                    y.title.text = '使用率 %';
-                  
-                    if (anns) {
-                      const showPool = checked.has('pool') && poolCap != null;
-                      const showGym  = checked.has('gym')  && gymCap  != null;
-                  
-                      // 只畫 100% 的虛線，不顯示標籤
-                      anns.poolCap.display = showPool;
-                      if (showPool) {
-                        anns.poolCap.yMin = anns.poolCap.yMax = 100;
-                        anns.poolCap.label.display = false;   // ← 關掉「游泳池上限100%」文字
-                      }
-                  
-                      anns.gymCap.display = showGym;
-                      if (showGym) {
-                        anns.gymCap.yMin = anns.gymCap.yMax = 100;
-                        anns.gymCap.label.display = false;    // ← 關掉「健身房上限100%」文字
-                      }
-                    }
-                    return;
-                  }
-
+                  if (SCALE_MODE === 'pct') return `${item.dataset.label.replace('人數','')}使用率：${v != null ? v : '—'}%`;
                   return `${item.dataset.label}：${v != null ? v : '—'} 人`;
                 }
               }
@@ -391,9 +368,8 @@
                   label: {
                     display: true,
                     content: '泳池上限',
-                    position: 'end',  // ← 由左上改到右緣
-                    xAdjust: -6,      // ← 微調到圖內
-                    yAdjust: -6,
+                    position: 'end',
+                    xAdjust: -6, yAdjust: -6,
                     backgroundColor: 'rgba(99,102,241,.15)',
                     color: '#e5e7eb'
                   }
@@ -408,7 +384,8 @@
                   label: {
                     display: true,
                     content: '健身房上限',
-                    position: 'start',
+                    position: 'end',
+                    xAdjust: -6, yAdjust: -6,
                     backgroundColor: 'rgba(16,185,129,.15)',
                     color: '#e5e7eb'
                   }
@@ -448,81 +425,79 @@
       return chart;
     }
 
-    // 讀目前勾選了哪些序列
     function getCheckedSeries() {
       return new Set(
-        Array.from(document.querySelectorAll('#seriesToggles input:checked'))
-             .map(cb => cb.value) // 'pool' | 'gym'
+        Array.from(document.querySelectorAll('#seriesToggles input:checked')).map(cb => cb.value)
       );
     }
 
-    // 百分比轉換
     function toPct(arr, cap){
       if (!Number.isFinite(cap)) return arr.map(()=>null);
       return arr.map(v => Number.isFinite(v) ? Math.round((v/cap)*100) : null);
     }
 
-    // 依勾選狀態，動態設定 Y 軸上限與上限虛線顯示
+    // ★ 依模式與門檻，調整 y 軸與各別上限虛線
     function updateYAxisAndCaps(chart, poolData, gymData) {
-      const checked = getCheckedSeries();
-      const cap = CAPACITY[currentCenter] || {};
-      const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
-      const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
-      const anns = chart.options.plugins?.annotation?.annotations;
-      const y = chart.options.scales.y;
+      const caps = (CAPACITY && CAPACITY[currentCenter]) || {};
+      const poolCap = Number.isFinite(caps.pool) ? caps.pool : null;
+      const gymCap  = Number.isFinite(caps.gym)  ? caps.gym  : null;
 
+      const checked = getCheckedSeries();
+      const showPool = checked.has('pool');
+      const showGym  = checked.has('gym');
+
+      const y    = chart.options.scales.y;
+      const anns = chart.options.plugins?.annotation?.annotations;
+
+      // 百分比模式：固定 0~100，兩條各自顯示 100% 虛線，但不顯示標籤
       if (SCALE_MODE === 'pct') {
-        // 百分比模式：Y 軸固定 0–100，虛線在 100%
         y.beginAtZero = true;
         y.suggestedMax = 100;
         y.title.text = '使用率 %';
 
         if (anns) {
-          if (checked.has('pool') && poolCap != null) {
-            anns.poolCap.display = true;
+          anns.poolCap.display = showPool && poolCap != null;
+          if (anns.poolCap.display) {
             anns.poolCap.yMin = anns.poolCap.yMax = 100;
-            anns.poolCap.label.content = '泳池上限 100%';
-          } else anns.poolCap.display = false;
-
-          if (checked.has('gym') && gymCap != null) {
-            anns.gymCap.display = true;
+            anns.poolCap.label.display = false;
+          }
+          anns.gymCap.display = showGym && gymCap != null;
+          if (anns.gymCap.display) {
             anns.gymCap.yMin = anns.gymCap.yMax = 100;
-            anns.gymCap.label.content = '健身房上限 100%';
-          } else anns.gymCap.display = false;
+            anns.gymCap.label.display = false;
+          }
         }
         return;
       }
 
-      // 絕對值模式：只用「可見資料」決定 Y 軸，避免被超大上限拉高
+      // 人數模式：各別達 85% 才顯示該條虛線，且才把上限納入 y 軸
       y.title.text = '人數';
-      const parts = [0];
-      if (checked.has('pool')) parts.push(...(poolData||[]).filter(Number.isFinite));
-      if (checked.has('gym'))  parts.push(...(gymData ||[]).filter(Number.isFinite));
-      const dataMax = parts.length ? Math.max(...parts) : 0;
 
-      // 只在上限不比資料大太多（<= 2 倍）時才把上限納入 yMax
-      const maybeIncludeCap = (capVal) => (Number.isFinite(capVal) && capVal <= dataMax * 2) ? capVal : null;
-      const capForScale = Math.max(
-        maybeIncludeCap(poolCap) ?? 0,
-        maybeIncludeCap(gymCap)  ?? 0
-      );
+      const poolMax = showPool ? Math.max(0, ...poolData.filter(Number.isFinite)) : 0;
+      const gymMax  = showGym  ? Math.max(0, ...gymData .filter(Number.isFinite)) : 0;
+      const dataMax = Math.max(poolMax, gymMax);
 
+      const reachedPool = showPool && Number.isFinite(poolCap) && poolMax >= poolCap * (CAP_SHOW_THRESHOLD || 0.85);
+      const reachedGym  = showGym  && Number.isFinite(gymCap)  && gymMax  >= gymCap  * (CAP_SHOW_THRESHOLD || 0.85);
+
+      const capForScale = Math.max(reachedPool ? poolCap : 0, reachedGym ? gymCap : 0);
       const yMaxBase = Math.max(dataMax, capForScale);
+      y.beginAtZero = true;
       y.suggestedMax = yMaxBase > 0 ? Math.ceil(yMaxBase * 1.1) : 10;
 
       if (anns) {
-        // 畫在圖內的上限（若過大就隱藏，避免擠壓）
-        if (checked.has('pool') && poolCap != null && poolCap <= y.suggestedMax) {
-          anns.poolCap.display = true;
+        anns.poolCap.display = reachedPool;
+        if (reachedPool) {
           anns.poolCap.yMin = anns.poolCap.yMax = poolCap;
+          anns.poolCap.label.display = true;
           anns.poolCap.label.content = `泳池上限 ${poolCap}`;
-        } else anns.poolCap.display = false;
-
-        if (checked.has('gym') && gymCap != null && gymCap <= y.suggestedMax) {
-          anns.gymCap.display = true;
+        }
+        anns.gymCap.display = reachedGym;
+        if (reachedGym) {
           anns.gymCap.yMin = anns.gymCap.yMax = gymCap;
+          anns.gymCap.label.display = true;
           anns.gymCap.label.content = `健身房上限 ${gymCap}`;
-        } else anns.gymCap.display = false;
+        }
       }
     }
 
@@ -547,7 +522,6 @@
       const c = initChart();
       const { times, pool, gym } = sliceForChart();
 
-      // 依模式準備資料
       const cap = CAPACITY[currentCenter] || {};
       let poolData = pool, gymData = gym;
       if (SCALE_MODE === 'pct') {
