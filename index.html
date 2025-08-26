@@ -11,7 +11,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
   <!-- Annotation 插件：用來畫上限虛線 -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
-  <!-- 可靠解析 Google Sheet CSV -->
+  <!-- 解析 Google Sheet CSV -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <style>
@@ -39,7 +39,6 @@
       appearance:auto;
     }
     .select option { background:#fff; color:#000; }
-
     #seriesToggles label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
     #seriesToggles input[type="checkbox"]{ width:16px; height:16px; accent-color:#60a5fa; }
   </style>
@@ -96,7 +95,7 @@
     const DAY_START = 6;  // 06:00
     const DAY_END   = 22; // 到 22:59 都算（含 22）
 
-    // 各中心上限（沒有上限就填 null）
+    // 各中心上限（無上限填 null）
     const CAPACITY = {
       '南屯運動中心': { pool: 200, gym: 120 },
       '北區運動中心': { pool: 480, gym: 180 },
@@ -153,7 +152,7 @@
     /** @type {{t:number, center:string, pool:number|null, gym:number|null, isoDate:string}[]} */
     let rows = [];
     let currentCenter = DEFAULT_CENTER;  // 預設南屯
-    let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
+    let currentIsoDate = '';             // 例如 '2025-08-14'
 
     // ====== 自訂動畫插件（藤蔓生成）======
     const VineRevealPlugin = {
@@ -198,7 +197,8 @@
       }
     };
     Chart.register(VineRevealPlugin);
-    Chart.register(window['chartjs-plugin-annotation'] || window['ChartAnnotation']);
+    // 註冊 annotation 插件（CDN 會暴露為全域 ChartAnnotation）
+    Chart.register(window.ChartAnnotation || window['chartjs-plugin-annotation']);
 
     async function fetchCSV() {
       const res = await fetch(csvUrl(), { cache: 'no-store' });
@@ -300,11 +300,7 @@
     // 更新頁面主標題
     function updateHeading() {
       const h1 = document.getElementById('pageTitle');
-      if (currentCenter) {
-        h1.textContent = `${currentCenter}｜人流`;
-      } else {
-        h1.textContent = `台中市各運動中心｜人流`;
-      }
+      h1.textContent = currentCenter ? `${currentCenter}｜人流` : `台中市各運動中心｜人流`;
     }
 
     let chart;
@@ -419,13 +415,70 @@
       return chart;
     }
 
-    // 勾選框控制可見度
+    // 讀目前勾選了哪些序列
+    function getCheckedSeries() {
+      return new Set(
+        Array.from(document.querySelectorAll('#seriesToggles input:checked'))
+             .map(cb => cb.value) // 'pool' | 'gym'
+      );
+    }
+
+    // 依勾選狀態，動態設定 Y 軸上限與上限虛線顯示
+    function updateYAxisAndCaps(chart, poolData, gymData) {
+      const checked = getCheckedSeries();
+
+      // 當前中心的上限
+      const cap = CAPACITY[currentCenter] || {};
+      const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
+      const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
+
+      // 只取「可見」資料與上限來決定刻度
+      const parts = [0]; // 保底
+      if (checked.has('pool')) {
+        parts.push(...(poolData || []).filter(Number.isFinite));
+        if (poolCap != null) parts.push(poolCap);
+      }
+      if (checked.has('gym')) {
+        parts.push(...(gymData || []).filter(Number.isFinite));
+        if (gymCap != null) parts.push(gymCap);
+      }
+
+      const dataMax = parts.length ? Math.max(...parts) : 0;
+      const yMax = dataMax > 0 ? Math.ceil(dataMax * 1.1) : 10;
+      chart.options.scales.y.suggestedMax = yMax;
+
+      // 上限虛線：只有被勾選的才顯示
+      const anns = chart.options.plugins?.annotation?.annotations;
+      if (anns) {
+        if (checked.has('pool') && poolCap != null) {
+          anns.poolCap.display = true;
+          anns.poolCap.yMin = anns.poolCap.yMax = poolCap;
+          anns.poolCap.label.content = `泳池上限 ${poolCap}`;
+        } else {
+          anns.poolCap.display = false;
+        }
+
+        if (checked.has('gym') && gymCap != null) {
+          anns.gymCap.display = true;
+          anns.gymCap.yMin = anns.gymCap.yMax = gymCap;
+          anns.gymCap.label.content = `健身房上限 ${gymCap}`;
+        } else {
+          anns.gymCap.display = false;
+        }
+      }
+    }
+
+    // 勾選框控制可見度（並重算上限）
     function applyCheckboxVisibility() {
       if (!chart) return;
       const checked = Array.from(document.querySelectorAll('#seriesToggles input:checked'))
                            .map(cb => cb.value);
       chart.data.datasets[0].hidden = !checked.includes('pool'); // 泳池
       chart.data.datasets[1].hidden = !checked.includes('gym');  // 健身
+
+      // 依最新勾選狀態重算 Y 軸與上限虛線
+      updateYAxisAndCaps(chart, chart.data.datasets[0].data, chart.data.datasets[1].data);
+
       chart.update('none');
     }
 
@@ -446,44 +499,8 @@
       const plugin = Chart.registry.getPlugin('vineReveal');
       if (plugin && typeof plugin.restart === 'function') plugin.restart(c);
 
-      // 依中心套上限
-      const cap = CAPACITY[currentCenter] || {};
-      const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
-      const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
-
-      // 目前最新值
-      const poolNow = lastFinite(pool);
-      const gymNow  = lastFinite(gym);
-
-      // Y 軸上限：取資料最大值 / 上限中的最大者，再 +10%
-      const dataMax = Math.max(
-        0,
-        ...pool.filter(Number.isFinite),
-        ...gym.filter(Number.isFinite),
-        poolCap ?? 0,
-        gymCap ?? 0
-      );
-      const yMax = dataMax > 0 ? Math.ceil(dataMax * 1.1) : 10;
-      c.options.scales.y.suggestedMax = yMax;
-
-      // 上限虛線
-      const anns = c.options.plugins.annotation.annotations;
-      if (anns) {
-        if (poolCap != null) {
-          anns.poolCap.display = true;
-          anns.poolCap.yMin = anns.poolCap.yMax = poolCap;
-          anns.poolCap.label.content = `泳池上限 ${poolCap}`;
-        } else {
-          anns.poolCap.display = false;
-        }
-        if (gymCap != null) {
-          anns.gymCap.display = true;
-          anns.gymCap.yMin = anns.gymCap.yMax = gymCap;
-          anns.gymCap.label.content = `健身房上限 ${gymCap}`;
-        } else {
-          anns.gymCap.display = false;
-        }
-      }
+      // 依勾選狀態計算 Y 軸與上限虛線
+      updateYAxisAndCaps(c, c.data.datasets[0].data, c.data.datasets[1].data);
 
       // 套用更新
       c.update('none');
@@ -495,8 +512,15 @@
       } else {
         document.getElementById('lastUpd').textContent = '—';
       }
+
+      const poolNow = lastFinite(pool);
+      const gymNow  = lastFinite(gym);
       document.getElementById('poolNow').textContent = (poolNow != null) ? poolNow : '—';
       document.getElementById('gymNow').textContent  = (gymNow  != null) ? gymNow  : '—';
+
+      const cap = CAPACITY[currentCenter] || {};
+      const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
+      const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
 
       const nf = new Intl.NumberFormat('zh-TW');
       const showPct = (now, cap) => (cap > 0 && now != null) ? `${Math.round((now / cap) * 100)}%` : '—%';
@@ -505,8 +529,6 @@
       document.getElementById('gymMax').textContent  = (gymCap  != null) ? nf.format(gymCap)  : '—';
       document.getElementById('poolPct').textContent = (poolCap != null) ? showPct(poolNow, poolCap) : '—%';
       document.getElementById('gymPct').textContent  = (gymCap  != null) ? showPct(gymNow,  gymCap)  : '—%';
-
-      applyCheckboxVisibility();
     }
 
     async function refresh() {
