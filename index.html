@@ -9,9 +9,9 @@
   <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
-  <!-- Annotation plugin（畫上限虛線） -->
+  <!-- Annotation 插件：用來畫上限虛線 -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
-  <!-- 解析 Google Sheet CSV -->
+  <!-- 可靠解析 Google Sheet CSV -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <style>
@@ -38,7 +38,8 @@
       background:rgba(255,255,255,.06); color:var(--fg);
       appearance:auto;
     }
-    .select option { background:#fff; color:#000; } /* 展開列表白底黑字 */
+    .select option { background:#fff; color:#000; }
+
     #seriesToggles label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
     #seriesToggles input[type="checkbox"]{ width:16px; height:16px; accent-color:#60a5fa; }
   </style>
@@ -47,10 +48,10 @@
   <div class="wrap">
     <div class="card">
       <h1 id="pageTitle">南屯運動中心｜人流</h1>
-      <p class="sub">來源：Google Sheet（all_centers 分頁）→ Chart.js · 固定只顯示 06:00–22:00</p>
+      <p class="sub">來源：Google Sheet（CSV / all_centers 分頁）→ Chart.js（定時更新） · 固定只顯示 06:00–22:00</p>
 
       <div class="row">
-        <!-- 加入 x/上限 與百分比 -->
+        <!-- 顯示 x/上限 與 % -->
         <span class="pill">游泳池 <b id="poolNow">—</b> / <span id="poolMax">—</span> 人（<span id="poolPct">—%</span>）</span>
         <span class="pill">健身房 <b id="gymNow">—</b> / <span id="gymMax">—</span> 人（<span id="gymPct">—%</span>）</span>
         <span class="pill">最後更新：<span id="lastUpd">—</span></span>
@@ -71,7 +72,6 @@
             </select>
           </div>
         </div>
-
         <div id="seriesToggles" style="display:flex; gap:12px; align-items:center; color:var(--fg)">
           <label><input type="checkbox" value="pool" checked> 游泳池</label>
           <label><input type="checkbox" value="gym" checked> 健身房</label>
@@ -90,16 +90,16 @@
   <script>
     // === 設定 ===
     const DEFAULT_CENTER = '南屯運動中心';
-    const SHEET_GID_ALL_CENTERS = '840629068';
+    const SHEET_GID_ALL_CENTERS = '840629068'; // all_centers 分頁 gid
     const CSV_BASE = "https://docs.google.com/spreadsheets/d/1dc9bQyHppywqpy82E-OIV4HYoXFgTcXbxNexlV4_5dE/export?format=csv";
     const REFRESH_MS = 600_000; // 10 分鐘
     const DAY_START = 6;  // 06:00
-    const DAY_END   = 22; // 22:59 也算
+    const DAY_END   = 22; // 到 22:59 都算（含 22）
 
     // 各中心上限（沒有上限就填 null）
     const CAPACITY = {
       '南屯運動中心': { pool: 200, gym: 120 },
-      '北區運動中心': { pool: 350, gym: 180 },
+      '北區運動中心': { pool: 480, gym: 180 },
       '朝馬運動中心': { pool: 180, gym: 90 },
       '大里運動中心': { pool: 160, gym: 140 },
       '潭子運動中心': { pool: 200, gym: 90 },
@@ -121,18 +121,23 @@
     // 解析台北時區時間（支援多種格式）
     function parseTWDateMs(tStr) {
       const opts = { locale: 'zh-TW', zone: 'Asia/Taipei' };
+      const s = (tStr || '').toString().trim();
+      if (!s) return NaN;
       let dt;
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm:ss', opts); if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy-MM-dd HH:mm', opts);    if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm:ss', opts);   if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d HH:mm', opts);      if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm:ss', opts);  if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromFormat(tStr, 'yyyy/M/d a h:mm', opts);     if (dt.isValid) return dt.toMillis();
-      dt = luxon.DateTime.fromISO(tStr, { zone: 'Asia/Taipei' });        if (dt.isValid) return dt.toMillis();
-      return NaN;
+      dt = luxon.DateTime.fromFormat(s, 'yyyy-MM-dd HH:mm:ss', opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(s, 'yyyy-MM-dd HH:mm',    opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(s, 'yyyy/M/d HH:mm:ss',   opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(s, 'yyyy/M/d HH:mm',      opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(s, 'yyyy/M/d a h:mm:ss',  opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(s, 'yyyy/M/d a h:mm',     opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(s, 'yyyy.MM.dd HH:mm:ss', opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromFormat(s, 'yyyy.MM.dd HH:mm',    opts); if (dt.isValid) return dt.toMillis();
+      dt = luxon.DateTime.fromISO(s, { zone: 'Asia/Taipei' });        if (dt.isValid) return dt.toMillis();
+      const t = Date.parse(s);
+      return Number.isNaN(t) ? NaN : t;
     }
 
-    // 欄位映射 + 去 BOM
+    // 欄位對應（容錯多種命名 + 去掉 BOM）
     function pick(obj, keysRegex) {
       for (const k of Object.keys(obj)) {
         const nk = k.replace(/\ufeff/g,'').trim();
@@ -147,10 +152,10 @@
 
     /** @type {{t:number, center:string, pool:number|null, gym:number|null, isoDate:string}[]} */
     let rows = [];
-    let currentCenter = DEFAULT_CENTER;
-    let currentIsoDate = '';
+    let currentCenter = DEFAULT_CENTER;  // 預設南屯
+    let currentIsoDate = '';             // 例如 '2025-08-14'（台北時區）
 
-    // 「藤蔓生成」插件
+    // ====== 自訂動畫插件（藤蔓生成）======
     const VineRevealPlugin = {
       id: 'vineReveal',
       duration: 2500,
@@ -193,17 +198,7 @@
       }
     };
     Chart.register(VineRevealPlugin);
-    if (window.ChartAnnotation) Chart.register(window.ChartAnnotation); // 註冊 annotation 外掛
-
-    // 工具
-    const toNumOrNull = (v) => {
-      const n = Number((v ?? '').toString().trim());
-      return Number.isFinite(n) ? n : null;
-    };
-    const safeLastFinite = (arr) => {
-      for (let i = arr.length - 1; i >= 0; i--) if (Number.isFinite(arr[i])) return arr[i];
-      return null;
-    };
+    Chart.register(window['chartjs-plugin-annotation'] || window['ChartAnnotation']);
 
     async function fetchCSV() {
       const res = await fetch(csvUrl(), { cache: 'no-store' });
@@ -217,8 +212,13 @@
       for (const r of parsed.data) {
         const tStr   = (pick(r, RX_TIME)   ?? '').toString().trim();
         const center = (pick(r, RX_CENTER) ?? '').toString().trim();
-        const pool   = toNumOrNull(pick(r, RX_POOL));
-        const gym    = toNumOrNull(pick(r, RX_GYM));
+
+        // 嚴謹的數字處理：非數字則記為 null（避免把空字串誤當 0）
+        const poolRaw = (pick(r, RX_POOL) ?? '').toString().trim();
+        const gymRaw  = (pick(r, RX_GYM)  ?? '').toString().trim();
+        const poolNum = Number(poolRaw);  const pool = Number.isFinite(poolNum) ? poolNum : null;
+        const gymNum  = Number(gymRaw);   const gym  = Number.isFinite(gymNum)  ? gymNum  : null;
+
         const t = parseTWDateMs(tStr);
         if (!center || Number.isNaN(t)) continue;
 
@@ -253,7 +253,7 @@
 
     function rebuildDateSelect() {
       const dates = Array.from(new Set(rows.filter(r=>r.center===currentCenter).map(r=>r.isoDate)))
-        .sort((a,b)=> b.localeCompare(a));
+        .sort((a,b)=> b.localeCompare(a)); // 新→舊
       const sel = document.getElementById('dateSel');
       if (dates.length === 0) {
         sel.innerHTML = `<option value="" disabled selected>（此中心無資料）</option>`;
@@ -276,15 +276,15 @@
       }
     }
 
-    // 依中心 + 日期切片；07:00~22:00 若 pool/gym 同為 0 就略過（null 不當作 0）
+    // 依中心 + 日期切片；07:00~22:00 若兩邊都「缺或為 0」則排除
     function sliceForChart() {
       const filtered = rows.filter(r => {
         if (r.center !== currentCenter || r.isoDate !== currentIsoDate) return false;
         const hour = luxon.DateTime.fromMillis(r.t).setZone('Asia/Taipei').hour;
         if (hour >= 7 && hour <= 22) {
-          const p = (r.pool ?? 0);
-          const g = (r.gym  ?? 0);
-          if (p === 0 && g === 0) return false;
+          const poolZeroOrMissing = (r.pool == null) || (r.pool === 0);
+          const gymZeroOrMissing  = (r.gym  == null) || (r.gym  === 0);
+          if (poolZeroOrMissing && gymZeroOrMissing) return false;
         }
         if (r.center === '港區運動中心' && r.gym === 100) return false; // 過濾異常值
         return true;
@@ -292,8 +292,8 @@
 
       return {
         times: filtered.map(r=>r.t),
-        pool:  filtered.map(r=>r.pool),
-        gym:   filtered.map(r=>r.gym),
+        pool:  filtered.map(r=> (Number.isFinite(r.pool) ? r.pool : null)),
+        gym:   filtered.map(r=> (Number.isFinite(r.gym)  ? r.gym  : null)),
       };
     }
 
@@ -317,24 +317,28 @@
           {
             label: '游泳池人數',
             data: [],
-            borderWidth: 3, tension: 0.5,
-            pointRadius: 2, pointHoverRadius: 6,
-            borderCapStyle: 'round', borderJoinStyle: 'round',
+            borderWidth: 3,
+            tension: 0.5,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            borderCapStyle: 'round',
+            borderJoinStyle: 'round',
             borderColor: 'rgba(99,102,241,1)',      // indigo
             backgroundColor: 'rgba(99,102,241,0.15)',
-            fill: 'origin',
-            spanGaps: true
+            fill: 'origin'
           },
           {
             label: '健身房人數',
             data: [],
-            borderWidth: 3, tension: 0.35,
-            pointRadius: 2, pointHoverRadius: 6,
-            borderCapStyle: 'round', borderJoinStyle: 'round',
+            borderWidth: 3,
+            tension: 0.35,
+            pointRadius: 2,
+            pointHoverRadius: 6,
+            borderCapStyle: 'round',
+            borderJoinStyle: 'round',
             borderColor: 'rgba(16,185,129,1)',      // emerald
             backgroundColor: 'rgba(16,185,129,0.15)',
-            fill: 'origin',
-            spanGaps: true
+            fill: 'origin'
           }
         ]},
         options: {
@@ -351,21 +355,33 @@
             annotation: {
               annotations: {
                 poolCap: {
-                  type: 'line', yMin: 0, yMax: 0, display: false,
-                  borderColor: 'rgba(99,102,241,.6)', borderWidth: 1, borderDash: [6,6],
+                  type: 'line',
+                  yMin: 0, yMax: 0,
+                  display: false,
+                  borderColor: 'rgba(99,102,241,.6)',
+                  borderWidth: 1,
+                  borderDash: [6,6],
                   label: {
-                    display: true, content: '泳池上限',
+                    display: true,
+                    content: '泳池上限',
                     position: 'start',
-                    backgroundColor: 'rgba(99,102,241,.15)', color: '#e5e7eb'
+                    backgroundColor: 'rgba(99,102,241,.15)',
+                    color: '#e5e7eb'
                   }
                 },
                 gymCap: {
-                  type: 'line', yMin: 0, yMax: 0, display: false,
-                  borderColor: 'rgba(16,185,129,.6)', borderWidth: 1, borderDash: [6,6],
+                  type: 'line',
+                  yMin: 0, yMax: 0,
+                  display: false,
+                  borderColor: 'rgba(16,185,129,.6)',
+                  borderWidth: 1,
+                  borderDash: [6,6],
                   label: {
-                    display: true, content: '健身房上限',
+                    display: true,
+                    content: '健身房上限',
                     position: 'start',
-                    backgroundColor: 'rgba(16,185,129,.15)', color: '#e5e7eb'
+                    backgroundColor: 'rgba(16,185,129,.15)',
+                    color: '#e5e7eb'
                   }
                 }
               }
@@ -375,9 +391,15 @@
             x: {
               type: 'time',
               adapters: { date: { zone: 'Asia/Taipei' } },
-              time: { unit: 'hour', stepSize: 1, displayFormats: { hour: 'HH:mm', minute: 'HH:mm' }, tooltipFormat: 'HH:mm' },
+              time: {
+                unit: 'hour',
+                stepSize: 1,
+                displayFormats: { hour: 'HH:mm', minute: 'HH:mm' },
+                tooltipFormat: 'HH:mm'
+              },
               ticks: {
-                color: '#e5e7eb', autoSkip: true, maxRotation: 0, minRotation: 0, maxTicksLimit: 10,
+                color: '#e5e7eb',
+                autoSkip: true, maxRotation: 0, minRotation: 0, maxTicksLimit: 10,
                 callback: (val) => luxon.DateTime.fromMillis(val).setZone('Asia/Taipei').toFormat('HH:mm')
               },
               grid: { color: 'rgba(255,255,255,.08)' },
@@ -385,11 +407,11 @@
             },
             y: {
               beginAtZero: true,
+              suggestedMax: 10,
               ticks: { color: '#e5e7eb' },
               grid: { color: 'rgba(255,255,255,.08)' },
               title: { display: true, text: '人數', color: '#e5e7eb' },
-              border: { color: 'rgba(255,255,255,.15)' },
-              suggestedMax: 10
+              border: { color: 'rgba(255,255,255,.15)' }
             }
           }
         }
@@ -407,6 +429,11 @@
       chart.update('none');
     }
 
+    function lastFinite(arr) {
+      for (let i = arr.length - 1; i >= 0; i--) if (Number.isFinite(arr[i])) return arr[i];
+      return null;
+    }
+
     function applyAndRender() {
       const c = initChart();
       const { times, pool, gym } = sliceForChart();
@@ -419,39 +446,37 @@
       const plugin = Chart.registry.getPlugin('vineReveal');
       if (plugin && typeof plugin.restart === 'function') plugin.restart(c);
 
-      // === 依中心套上限 ===
+      // 依中心套上限
       const cap = CAPACITY[currentCenter] || {};
       const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
       const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
 
-      // 最新值（取最後一個有限數字）
-      const poolNow = safeLastFinite(pool);
-      const gymNow  = safeLastFinite(gym);
+      // 目前最新值
+      const poolNow = lastFinite(pool);
+      const gymNow  = lastFinite(gym);
 
       // Y 軸上限：取資料最大值 / 上限中的最大者，再 +10%
-      const finitePool = pool.filter(Number.isFinite);
-      const finiteGym  = gym.filter(Number.isFinite);
       const dataMax = Math.max(
         0,
-        ...(finitePool.length ? finitePool : [0]),
-        ...(finiteGym.length  ? finiteGym  : [0]),
+        ...pool.filter(Number.isFinite),
+        ...gym.filter(Number.isFinite),
         poolCap ?? 0,
-        gymCap  ?? 0
+        gymCap ?? 0
       );
       const yMax = dataMax > 0 ? Math.ceil(dataMax * 1.1) : 10;
       c.options.scales.y.suggestedMax = yMax;
 
       // 上限虛線
-      const anns = c.options.plugins.annotation?.annotations;
+      const anns = c.options.plugins.annotation.annotations;
       if (anns) {
-        if (Number.isFinite(poolCap)) {
+        if (poolCap != null) {
           anns.poolCap.display = true;
           anns.poolCap.yMin = anns.poolCap.yMax = poolCap;
           anns.poolCap.label.content = `泳池上限 ${poolCap}`;
         } else {
           anns.poolCap.display = false;
         }
-        if (Number.isFinite(gymCap)) {
+        if (gymCap != null) {
           anns.gymCap.display = true;
           anns.gymCap.yMin = anns.gymCap.yMax = gymCap;
           anns.gymCap.label.content = `健身房上限 ${gymCap}`;
@@ -460,52 +485,27 @@
         }
       }
 
-      // 更新圖
+      // 套用更新
       c.update('none');
 
-      // === 更新頁面數字 ===
-      const nf = new Intl.NumberFormat('zh-TW');
-      const pctFmt = (n) => `${Math.round(n)}%`;
-
-      // 最新時間
+      // 更新頁面 pill 數字與時間
       if (times.length) {
         document.getElementById('lastUpd').textContent =
           luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
       } else {
         document.getElementById('lastUpd').textContent = '—';
       }
+      document.getElementById('poolNow').textContent = (poolNow != null) ? poolNow : '—';
+      document.getElementById('gymNow').textContent  = (gymNow  != null) ? gymNow  : '—';
 
-      // 泳池
-      if (Number.isFinite(poolNow)) {
-        document.getElementById('poolNow').textContent = nf.format(poolNow);
-      } else {
-        document.getElementById('poolNow').textContent = '—';
-      }
-      if (Number.isFinite(poolCap)) {
-        document.getElementById('poolMax').textContent = nf.format(poolCap);
-        const pct = (Number.isFinite(poolNow) && poolCap > 0) ? (poolNow / poolCap) * 100 : 0;
-        document.getElementById('poolPct').textContent = pctFmt(pct);
-      } else {
-        document.getElementById('poolMax').textContent = '—';
-        document.getElementById('poolPct').textContent = '—%';
-      }
+      const nf = new Intl.NumberFormat('zh-TW');
+      const showPct = (now, cap) => (cap > 0 && now != null) ? `${Math.round((now / cap) * 100)}%` : '—%';
 
-      // 健身
-      if (Number.isFinite(gymNow)) {
-        document.getElementById('gymNow').textContent = nf.format(gymNow);
-      } else {
-        document.getElementById('gymNow').textContent = '—';
-      }
-      if (Number.isFinite(gymCap)) {
-        document.getElementById('gymMax').textContent = nf.format(gymCap);
-        const pct = (Number.isFinite(gymNow) && gymCap > 0) ? (gymNow / gymCap) * 100 : 0;
-        document.getElementById('gymPct').textContent = pctFmt(pct);
-      } else {
-        document.getElementById('gymMax').textContent = '—';
-        document.getElementById('gymPct').textContent = '—%';
-      }
+      document.getElementById('poolMax').textContent = (poolCap != null) ? nf.format(poolCap) : '—';
+      document.getElementById('gymMax').textContent  = (gymCap  != null) ? nf.format(gymCap)  : '—';
+      document.getElementById('poolPct').textContent = (poolCap != null) ? showPct(poolNow, poolCap) : '—%';
+      document.getElementById('gymPct').textContent  = (gymCap  != null) ? showPct(gymNow,  gymCap)  : '—%';
 
-      // 依勾選狀態調整可見度
       applyCheckboxVisibility();
     }
 
@@ -513,7 +513,7 @@
       try {
         await fetchCSV();
         applyAndRender();
-        document.getElementById('csvLink').href = csvUrl();
+        document.getElementById('csvLink').href = csvUrl(); // 更新附帶 _ts 的 CSV 連結
       } catch (e) {
         console.error(e);
       }
