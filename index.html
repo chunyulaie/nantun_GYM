@@ -217,8 +217,10 @@
         // 嚴謹的數字處理：非數字則記為 null（避免把空字串誤當 0）
         const poolRaw = (pick(r, RX_POOL) ?? '').toString().trim();
         const gymRaw  = (pick(r, RX_GYM)  ?? '').toString().trim();
-        const poolNum = Number(poolRaw);  const pool = Number.isFinite(poolNum) ? poolNum : null;
-        const gymNum  = Number(gymRaw);   const gym  = Number.isFinite(gymNum)  ? gymNum  : null;
+        const poolNum = Number(poolRaw);  const pool = Number.isFinite(poolNum) ? Math.max(0, poolNum) : null;
+        const gymNum  = Number(gymRaw);   const gym  = Number.isFinite(gymNum)  ? Math.max(0, gymNum)  : null;
+
+
 
         const t = parseTWDateMs(tStr);
         if (!center || Number.isNaN(t)) continue;
@@ -521,12 +523,15 @@
     function applyAndRender() {
       const c = initChart();
       const { times, pool, gym } = sliceForChart();
-
+      const clamp0 = v => (Number.isFinite(v) ? Math.max(0, v) : null);
+      const poolClamped = pool.map(clamp0);
+      const gymClamped  = gym.map(clamp0);
+      
       const cap = CAPACITY[currentCenter] || {};
-      let poolData = pool, gymData = gym;
+      let poolData = poolClamped, gymData = gymClamped;
       if (SCALE_MODE === 'pct') {
-        poolData = toPct(pool, cap.pool);
-        gymData  = toPct(gym,  cap.gym);
+        poolData = toPct(poolClamped, cap.pool);
+        gymData  = toPct(gymClamped,  cap.gym);
       }
 
       c.data.labels = times;
