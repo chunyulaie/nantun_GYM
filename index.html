@@ -523,81 +523,77 @@
     function applyAndRender() {
       const c = initChart();
       const { times, pool, gym } = sliceForChart();
-
-
-      // ★ 這裡加過濾假 0
+    
+      // 1) 先把負數夾回 0（非數字 -> null）
+      const clamp0 = v => (Number.isFinite(v) ? Math.max(0, v) : null);
+      const poolClamped = pool.map(clamp0);
+      const gymClamped  = gym.map(clamp0);
+    
+      // 2) 過濾「孤立 0」（前後都 >0，只有中間是 0）
       function filterIsolatedZeros(arr) {
         const out = arr.slice();
         for (let i = 1; i < arr.length - 1; i++) {
-          const prev = arr[i - 1];
-          const curr = arr[i];
-          const next = arr[i + 1];
+          const prev = arr[i - 1], curr = arr[i], next = arr[i + 1];
           if (curr === 0 &&
               Number.isFinite(prev) && prev > 0 &&
               Number.isFinite(next) && next > 0) {
-            out[i] = null; // 設為 null 讓 Chart.js 留空斷線
+            out[i] = null; // 設為 null 讓 Chart.js 斷線，不會出現直線驟降
           }
         }
         return out;
       }
+      const poolFiltered = filterIsolatedZeros(poolClamped);
+      const gymFiltered  = filterIsolatedZeros(gymClamped);
     
-      const poolFiltered = filterIsolatedZeros(pool.map(v => Number.isFinite(v) ? Math.max(0, v) : null));
-      const gymFiltered  = filterIsolatedZeros(gym .map(v => Number.isFinite(v) ? Math.max(0, v) : null));
-    
+      // 3) 依模式決定實際要畫的資料
       const cap = CAPACITY[currentCenter] || {};
-      let poolData = poolFiltered, gymData = gymFiltered;
+      let poolData = poolFiltered;
+      let gymData  = gymFiltered;
       if (SCALE_MODE === 'pct') {
         poolData = toPct(poolFiltered, cap.pool);
         gymData  = toPct(gymFiltered,  cap.gym);
       }
     
+      // 4) 餵給圖表
       c.data.labels = times;
       c.data.datasets[0].data = poolData;
       c.data.datasets[1].data = gymData;
-      
-      const cap = CAPACITY[currentCenter] || {};
-      let poolData = poolClamped, gymData = gymClamped;
-      if (SCALE_MODE === 'pct') {
-        poolData = toPct(poolFiltered, cap.pool);
-        gymData  = toPct(gymFiltered,  cap.gym);
-      }
-
-      c.data.labels = times;
-      c.data.datasets[0].data = poolData;
-      c.data.datasets[1].data = gymData;
-
-      // 重新啟動動畫
+    
+      // 重啟入場動畫
       const plugin = Chart.registry.getPlugin('vineReveal');
       if (plugin && typeof plugin.restart === 'function') plugin.restart(c);
-
-      // 依勾選狀態計算 Y 軸與上限虛線
-      updateYAxisAndCaps(c, c.data.datasets[0].data, c.data.datasets[1].data);
-
-      // 套用更新
+    
+      // 更新 Y 軸與上限虛線
+      updateYAxisAndCaps(c, poolData, gymData);
       c.update('none');
-
-      // 更新頁面 pill 數字與時間（pill 一律顯示「絕對人數 + %」）
+    
+      // 5) 更新頁面上的 pill（用「絕對人數」顯示）
       if (times.length) {
         document.getElementById('lastUpd').textContent =
-          luxon.DateTime.fromMillis(times[times.length-1]).setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
+          luxon.DateTime.fromMillis(times[times.length-1])
+            .setZone('Asia/Taipei').toFormat('yyyy-MM-dd HH:mm:ss');
       } else {
         document.getElementById('lastUpd').textContent = '—';
       }
-
-      const poolNowAbs = lastFinite(pool);
-      const gymNowAbs  = lastFinite(gym);
+    
+      const lastFinite = arr => {
+        for (let i = arr.length - 1; i >= 0; i--) if (Number.isFinite(arr[i])) return arr[i];
+        return null;
+      };
+      const poolNowAbs = lastFinite(poolClamped);
+      const gymNowAbs  = lastFinite(gymClamped);
       document.getElementById('poolNow').textContent = (poolNowAbs != null) ? poolNowAbs : '—';
       document.getElementById('gymNow').textContent  = (gymNowAbs  != null) ? gymNowAbs  : '—';
-
+    
       const poolCap = Number.isFinite(cap.pool) ? cap.pool : null;
-      const gymCap  = Number.isFinite(cap.gym)  ? cap.gym  : null;
+      const gymCapV = Number.isFinite(cap.gym)  ? cap.gym  : null; // 避免與上面的 cap 變數名衝突
       const nf = new Intl.NumberFormat('zh-TW');
-      const showPct = (now, cap) => (cap > 0 && now != null) ? `${Math.round((now / cap) * 100)}%` : '—%';
-
+      const pct = (now, capVal) => (capVal > 0 && now != null) ? `${Math.round((now / capVal) * 100)}%` : '—%';
+    
       document.getElementById('poolMax').textContent = (poolCap != null) ? nf.format(poolCap) : '—';
-      document.getElementById('gymMax').textContent  = (gymCap  != null) ? nf.format(gymCap)  : '—';
-      document.getElementById('poolPct').textContent = (poolCap != null) ? showPct(poolNowAbs, poolCap) : '—%';
-      document.getElementById('gymPct').textContent  = (gymCap  != null) ? showPct(gymNowAbs,  gymCap)  : '—%';
+      document.getElementById('gymMax').textContent  = (gymCapV  != null) ? nf.format(gymCapV)  : '—';
+      document.getElementById('poolPct').textContent = (poolCap != null) ? pct(poolNowAbs, poolCap) : '—%';
+      document.getElementById('gymPct').textContent  = (gymCapV  != null) ? pct(gymNowAbs,  gymCapV)  : '—%';
     }
 
     async function refresh() {
