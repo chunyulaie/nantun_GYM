@@ -523,15 +523,43 @@
     function applyAndRender() {
       const c = initChart();
       const { times, pool, gym } = sliceForChart();
-      const clamp0 = v => (Number.isFinite(v) ? Math.max(0, v) : null);
-      const poolClamped = pool.map(clamp0);
-      const gymClamped  = gym.map(clamp0);
+
+
+      // ★ 這裡加過濾假 0
+      function filterIsolatedZeros(arr) {
+        const out = arr.slice();
+        for (let i = 1; i < arr.length - 1; i++) {
+          const prev = arr[i - 1];
+          const curr = arr[i];
+          const next = arr[i + 1];
+          if (curr === 0 &&
+              Number.isFinite(prev) && prev > 0 &&
+              Number.isFinite(next) && next > 0) {
+            out[i] = null; // 設為 null 讓 Chart.js 留空斷線
+          }
+        }
+        return out;
+      }
+    
+      const poolFiltered = filterIsolatedZeros(pool.map(v => Number.isFinite(v) ? Math.max(0, v) : null));
+      const gymFiltered  = filterIsolatedZeros(gym .map(v => Number.isFinite(v) ? Math.max(0, v) : null));
+    
+      const cap = CAPACITY[currentCenter] || {};
+      let poolData = poolFiltered, gymData = gymFiltered;
+      if (SCALE_MODE === 'pct') {
+        poolData = toPct(poolFiltered, cap.pool);
+        gymData  = toPct(gymFiltered,  cap.gym);
+      }
+    
+      c.data.labels = times;
+      c.data.datasets[0].data = poolData;
+      c.data.datasets[1].data = gymData;
       
       const cap = CAPACITY[currentCenter] || {};
       let poolData = poolClamped, gymData = gymClamped;
       if (SCALE_MODE === 'pct') {
-        poolData = toPct(poolClamped, cap.pool);
-        gymData  = toPct(gymClamped,  cap.gym);
+        poolData = toPct(poolFiltered, cap.pool);
+        gymData  = toPct(gymFiltered,  cap.gym);
       }
 
       c.data.labels = times;
